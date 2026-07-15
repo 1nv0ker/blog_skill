@@ -7,7 +7,7 @@ description: Research a named technology from authoritative web sources, draft a
 
 Create one evidence-based bilingual technology article and publish it exactly once. Treat an explicit invocation of this skill as production-publish authorization; after all checks pass, no second confirmation is required.
 
-## 1. Run the secret preflight before doing any work
+## 1. Run the fixed external-config preflight before doing any work
 
 Run:
 
@@ -15,20 +15,17 @@ Run:
 node <skill-directory>\scripts\configure.mjs --check
 ```
 
-Do this before browsing, generating images, or writing files. Never read or display the token file with model-visible tools. The helper reads the token only in its own process.
+Do this before browsing, generating images, or writing files. The deterministic helper reads the fixed external file `~/.sanity-blog/config.json` only inside its process. Never inspect that file with model-visible tools.
 
-If preflight fails, stop without creating any article files. Tell the user to:
-
-1. Rotate any Sanity token previously pasted into chat.
-2. Create a user-readable directory outside both the Git repository and this skill project.
-3. Put the new token in a one-line `sanity-token.txt` file.
-4. Provide only that file's absolute path, then run:
+If the helper reports `CONFIG_MISSING`, run this once:
 
 ```powershell
-node <skill-directory>\scripts\configure.mjs "<absolute-token-file>"
+node <skill-directory>\scripts\configure.mjs --init
 ```
 
-Never accept a token in chat, arguments, environment variables, Markdown, JSON, logs, or source files. `config.local.json` stores only the external absolute path.
+Then stop before creating article files and tell the user to fill the generated fixed file with exactly these fields: `projectId`, `dataset`, `apiVersion`, and `sanityToken`. Do not ask the user for a path. If `--check` reports an incomplete or invalid configuration, tell the user to correct that same fixed file; never overwrite it.
+
+After a successful `--check`, continue silently without repeating configuration questions. Never accept configuration values or a token in chat, command arguments, environment variables, Markdown, article JSON, logs, or source files. If any token was previously pasted into chat, tell the user to rotate it before filling the file.
 
 ## 2. Research the named technology
 
@@ -77,7 +74,7 @@ node <skill-directory>\scripts\validate-output.mjs "<returned-staging-article-pa
 node <skill-directory>\scripts\publish-output.mjs probe "<returned-staging-article-path>"
 ```
 
-`probe` performs the public API validation and a remote dry-run. If it reports HTTP 409, run `workspace.mjs release "<slug>" "<reservationId>"`, then reserve again with `workspace.mjs reserve "<base-slug>" --start=<nextStartVersion>`. Rewrite the two returned staging files with the new slug and repeat. Stop when `nextStartVersion` is null. Never send PUT.
+`probe` performs the public API validation and a remote dry-run. It sends the configured Sanity target and token only from deterministic code, and requires the API response to echo the same `projectId`, `dataset`, and `apiVersion`. A missing or mismatched target echo is a hard stop before production. If probe reports HTTP 409, run `workspace.mjs release "<slug>" "<reservationId>"`, then reserve again with `workspace.mjs reserve "<base-slug>" --start=<nextStartVersion>`. Rewrite the two returned staging files with the new slug and repeat. Stop when `nextStartVersion` is null. Never send PUT.
 
 On any failure before commit, release only this run's reservation with its exact ID. Never delete staging or reservation paths manually.
 

@@ -44,6 +44,65 @@ function response(body, status = 200) {
   })
 }
 
+const PUBLISHING_CONFIG = Object.freeze({
+  projectId: 'pcjr7pm7',
+  dataset: 'production',
+  apiVersion: '2026-07-05',
+  sanityToken: 'opaque-config-token',
+})
+
+test('configured requests send the complete target and require the API to echo it', async () => {
+  const f = await fixture()
+  const calls = []
+  const expectedTarget = {
+    projectId: PUBLISHING_CONFIG.projectId,
+    dataset: PUBLISHING_CONFIG.dataset,
+    apiVersion: PUBLISHING_CONFIG.apiVersion,
+  }
+  const result = await requestArticle('dry-run', f.articlePath, {
+    blogRoot: f.blogRoot,
+    publishingConfig: PUBLISHING_CONFIG,
+    fetchImpl: async (url, init) => {
+      calls.push({url, init})
+      return response({
+        data: {
+          status: 'dry-run',
+          mode: 'create',
+          slug: 'webtransport-guide',
+          uploadedAssetIds: [],
+          target: expectedTarget,
+        },
+        requestId: 'configured-dry-run',
+      })
+    },
+  })
+
+  assert.deepEqual(result.data.target, expectedTarget)
+  assert.equal(calls[0].init.headers['X-Sanity-Project-Id'], 'pcjr7pm7')
+  assert.equal(calls[0].init.headers['X-Sanity-Dataset'], 'production')
+  assert.equal(calls[0].init.headers['X-Sanity-Api-Version'], '2026-07-05')
+  assert.equal(calls[0].init.headers['X-Sanity-Token'], 'opaque-config-token')
+  assert.doesNotMatch(calls[0].url, /pcjr7pm7|opaque-config-token/u)
+
+  await assert.rejects(
+    requestArticle('dry-run', f.articlePath, {
+      blogRoot: f.blogRoot,
+      publishingConfig: PUBLISHING_CONFIG,
+      fetchImpl: async () =>
+        response({
+          data: {
+            status: 'dry-run',
+            mode: 'create',
+            slug: 'webtransport-guide',
+            uploadedAssetIds: [],
+          },
+          requestId: 'old-server-response',
+        }),
+    }),
+    (error) => error.code === 'API_RESPONSE_INVALID',
+  )
+})
+
 test('validation uses the fixed HTTPS endpoint without sending a token', async () => {
   const f = await fixture()
   const calls = []

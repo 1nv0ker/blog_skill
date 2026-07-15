@@ -1,5 +1,6 @@
 import {execFile} from 'node:child_process'
-import {lstat, readFile, realpath, stat, writeFile} from 'node:fs/promises'
+import {lstat, mkdir, readFile, realpath, stat, writeFile} from 'node:fs/promises'
+import {homedir} from 'node:os'
 import path from 'node:path'
 import {promisify} from 'node:util'
 import {fileURLToPath} from 'node:url'
@@ -7,11 +8,29 @@ import {fileURLToPath} from 'node:url'
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url))
 
 export const PROJECT_ROOT = path.resolve(scriptDirectory, '..', '..', '..')
-export const DEFAULT_CONFIG_PATH = path.join(PROJECT_ROOT, 'config.local.json')
-export const DEFAULT_REPOSITORY_ROOT = 'C:\\work\\MIYA-LLC-WEB'
+export function configPathForHome(homeDirectory = homedir()) {
+  return path.join(
+    path.resolve(homeDirectory),
+    '.sanity-blog',
+    'config.json',
+  )
+}
+export const DEFAULT_CONFIG_PATH = configPathForHome()
+export const DEFAULT_REPOSITORY_ROOT = path.dirname(PROJECT_ROOT)
 
 const MAX_TOKEN_CHARACTERS = 4096
 const MAX_TOKEN_FILE_BYTES = 8192
+const MAX_CONFIG_FILE_BYTES = 16 * 1024
+const PROJECT_ID_PATTERN = /^[a-z0-9]{1,64}$/u
+const DATASET_PATTERN = /^[A-Za-z0-9_-]{1,64}$/u
+const API_VERSION_PATTERN = /^\d{4}-\d{2}-\d{2}$/u
+const COMBINED_CONFIG_KEYS = ['apiVersion', 'dataset', 'projectId', 'sanityToken']
+const CONFIG_TEMPLATE = Object.freeze({
+  projectId: 'pcjr7pm7',
+  dataset: 'production',
+  apiVersion: '2026-07-05',
+  sanityToken: '',
+})
 const execFileAsync = promisify(execFile)
 
 const WINDOWS_ACL_SCRIPT = String.raw`
@@ -112,6 +131,60 @@ export async function assertTokenFilePermissions(
   }
 }
 
+export async function assertConfigFilePermissions(configPath, options = {}) {
+  try {
+    await assertTokenFilePermissions(configPath, options)
+  } catch {
+    throw new ConfigError(
+      'CONFIG_PERMISSIONS_UNSAFE',
+      'Configuration file and its directory must be readable only by the current user.',
+    )
+  }
+}
+
+function isStrictCalendarDate(value) {
+  if (!API_VERSION_PATTERN.test(value)) return false
+  const [year, month, day] = value.split('-').map(Number)
+  const date = new Date(Date.UTC(year, month - 1, day))
+  return (
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day
+  )
+}
+
+function validateCombinedConfig(config) {
+  if (!PROJECT_ID_PATTERN.test(config.projectId)) {
+    throw new ConfigError('SANITY_TARGET_INVALID', 'Sanity projectId format is invalid.')
+  }
+  if (!DATASET_PATTERN.test(config.dataset)) {
+    throw new ConfigError('SANITY_TARGET_INVALID', 'Sanity dataset format is invalid.')
+  }
+  if (!isStrictCalendarDate(config.apiVersion)) {
+    throw new ConfigError('SANITY_TARGET_INVALID', 'Sanity apiVersion must be a valid YYYY-MM-DD date.')
+  }
+  if (config.sanityToken === '') {
+    throw new ConfigError(
+      'CONFIG_INCOMPLETE',
+      'Fill sanityToken in the fixed external configuration file, then run --check again.',
+    )
+  }
+  if (
+    typeof config.sanityToken !== 'string' ||
+    config.sanityToken.length > MAX_TOKEN_CHARACTERS ||
+    config.sanityToken.trim() !== config.sanityToken ||
+    /[\r\n\0\uFEFF]/u.test(config.sanityToken)
+  ) {
+    throw new ConfigError('TOKEN_FORMAT_INVALID', 'Sanity Token format is invalid.')
+  }
+  return Object.freeze({
+    projectId: config.projectId,
+    dataset: config.dataset,
+    apiVersion: config.apiVersion,
+    sanityToken: config.sanityToken,
+  })
+}
+
 function isInside(root, candidate) {
   const relative = path.relative(root, candidate)
   return (
@@ -187,7 +260,7 @@ async function readTokenFile(
   return {token: oneLine, tokenFile: resolvedTokenFile}
 }
 
-async function readConfigFile(configPath) {
+async function readConfigFile(configPath, {permissionChecker = assertConfigFilePermissions} = {}) {
   let fileInfo
   try {
     fileInfo = await lstat(configPath)
@@ -200,6 +273,11 @@ async function readConfigFile(configPath) {
   if (!fileInfo.isFile() || fileInfo.isSymbolicLink()) {
     throw new ConfigError('CONFIG_INVALID', 'config.local.json 必须是普通文件。')
   }
+  if (fileInfo.size <= 0 || fileInfo.size > MAX_CONFIG_FILE_BYTES) {
+    throw new ConfigError('CONFIG_INVALID', 'External configuration file size is invalid.')
+  }
+
+  await permissionChecker(configPath)
 
   let config
   try {
@@ -207,6 +285,17 @@ async function readConfigFile(configPath) {
   } catch {
     throw new ConfigError('CONFIG_INVALID', 'config.local.json 不是有效 JSON。')
   }
+  const keys = Object.keys(config ?? {}).sort()
+  if (
+    config &&
+    typeof config === 'object' &&
+    !Array.isArray(config) &&
+    keys.length === COMBINED_CONFIG_KEYS.length &&
+    keys.every((key, index) => key === COMBINED_CONFIG_KEYS[index])
+  ) {
+    return validateCombinedConfig(config)
+  }
+
   if (
     !config ||
     typeof config !== 'object' ||
@@ -227,14 +316,61 @@ export async function loadPublishingConfig({
   configPath = DEFAULT_CONFIG_PATH,
   projectRoot = PROJECT_ROOT,
   repositoryRoot = DEFAULT_REPOSITORY_ROOT,
-  permissionChecker = assertTokenFilePermissions,
+  permissionChecker = assertConfigFilePermissions,
 } = {}) {
-  const config = await readConfigFile(path.resolve(configPath))
+  let config
+  try {
+    config = await readConfigFile(path.resolve(configPath), {permissionChecker})
+  } catch (error) {
+    if (error?.code === 'CONFIG_MISSING') {
+      throw new ConfigError(
+        'CONFIG_MISSING',
+        '固定外部配置 config.json 不存在；请运行一次 configure.mjs --init。',
+      )
+    }
+    throw error
+  }
+  if ('sanityToken' in config) return config
   return readTokenFile(path.resolve(config.tokenFile), {
     projectRoot,
     repositoryRoot,
     permissionChecker,
   })
+}
+
+export async function initializePublishingConfig({
+  configPath = DEFAULT_CONFIG_PATH,
+  projectRoot = PROJECT_ROOT,
+  repositoryRoot = DEFAULT_REPOSITORY_ROOT,
+  permissionChecker = assertConfigFilePermissions,
+} = {}) {
+  const target = path.resolve(configPath)
+  const [resolvedProjectRoot, resolvedRepositoryRoot] = await Promise.all([
+    canonicalDirectory(projectRoot, 'Skill project directory'),
+    canonicalDirectory(repositoryRoot, 'repository directory'),
+  ])
+  if (isInside(resolvedProjectRoot, target) || isInside(resolvedRepositoryRoot, target)) {
+    throw new ConfigError(
+      'CONFIG_LOCATION_UNSAFE',
+      'The fixed configuration file must be outside the Skill project and repository.',
+    )
+  }
+
+  await mkdir(path.dirname(target), {recursive: true, mode: 0o700})
+  try {
+    await writeFile(target, `${JSON.stringify(CONFIG_TEMPLATE, null, 2)}\n`, {
+      encoding: 'utf8',
+      flag: 'wx',
+      mode: 0o600,
+    })
+  } catch (error) {
+    if (error?.code === 'EEXIST') {
+      throw new ConfigError('CONFIG_EXISTS', 'The fixed external configuration file already exists.')
+    }
+    throw new ConfigError('CONFIG_WRITE_FAILED', 'Unable to create the fixed external configuration file.')
+  }
+  await permissionChecker(target)
+  return {configPath: target}
 }
 
 export async function writePublishingConfig(

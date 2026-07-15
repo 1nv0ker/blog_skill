@@ -3,11 +3,11 @@
 import path from 'node:path'
 import {fileURLToPath} from 'node:url'
 
-import {loadPublishingConfig, writePublishingConfig} from './config.mjs'
+import {initializePublishingConfig, loadPublishingConfig} from './config.mjs'
 
 function argumentError() {
   const error = new Error(
-    'Use --check, or provide one absolute external token-file path with optional --replace.',
+    'Use exactly --init or --check. Paths, tokens, and environment overrides are not accepted.',
   )
   error.code = 'ARGUMENT_INVALID'
   return error
@@ -16,26 +16,15 @@ function argumentError() {
 export function parseConfigureArguments(args) {
   if (!Array.isArray(args)) throw argumentError()
   if (args.length === 1 && args[0] === '--check') return {mode: 'check'}
-  if (args.includes('--check')) throw argumentError()
-
-  const replace = args.includes('--replace')
-  const paths = args.filter((argument) => argument !== '--replace')
-  if (
-    paths.length !== 1 ||
-    typeof paths[0] !== 'string' ||
-    paths[0].startsWith('-') ||
-    !path.isAbsolute(paths[0])
-  ) {
-    throw argumentError()
-  }
-  return {mode: 'write', tokenFile: paths[0], replace}
+  if (args.length === 1 && args[0] === '--init') return {mode: 'init'}
+  throw argumentError()
 }
 
 export async function runConfigureCommand(
   args,
   {
     loadConfig = loadPublishingConfig,
-    writeConfig = writePublishingConfig,
+    initializeConfig = initializePublishingConfig,
     log = console.log,
   } = {},
 ) {
@@ -46,9 +35,9 @@ export async function runConfigureCommand(
     return {mode: 'check'}
   }
 
-  await writeConfig(parsed.tokenFile, {replace: parsed.replace})
-  log('Configuration saved: only the external token-file path was stored.')
-  return {mode: 'write'}
+  const {configPath} = await initializeConfig()
+  log(`Configuration template created at ${configPath}. Fill all four fields, then run --check.`)
+  return {mode: 'init'}
 }
 
 async function main() {

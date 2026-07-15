@@ -102,7 +102,13 @@ test('project README contains only safe local Skill installation instructions', 
   assert.match(readme, /CODEX_HOME/u)
   assert.doesNotMatch(readme, /C:\\work|C:\\Users\\zglxi/u)
   assert.doesNotMatch(readme, /config\.local\.json|npm test|npm audit/u)
-  assert.deepEqual(Object.keys(JSON.parse(example)), ['tokenFile'])
+  assert.deepEqual(Object.keys(JSON.parse(example)), [
+    'projectId',
+    'dataset',
+    'apiVersion',
+    'sanityToken',
+  ])
+  assert.equal(JSON.parse(example).sanityToken, '')
   assert.doesNotMatch(`${readme}\n${example}`, /skrqbOU4|X-Sanity-Token:\s*\S{20,}/u)
 })
 
@@ -110,6 +116,14 @@ test('runtime files hard-code only the approved publisher origin', async () => {
   const apiClient = await readFile(path.join(skillRoot, 'scripts', 'api-client.mjs'), 'utf8')
   assert.match(apiClient, /https:\/\/publish\.miyaip\.com/u)
   assert.doesNotMatch(apiClient, /publisher\.example\.com|process\.env/u)
+})
+
+test('runtime uses the short fixed external config path without a MiyaIP path segment', async () => {
+  const config = await readFile(path.join(skillRoot, 'scripts', 'config.mjs'), 'utf8')
+  const instructions = await readFile(path.join(skillRoot, 'SKILL.md'), 'utf8')
+  assert.match(config, /\.sanity-blog[\s\S]*config\.json/u)
+  assert.match(instructions, /~\/\.sanity-blog\/config\.json/u)
+  assert.doesNotMatch(`${config}\n${instructions}`, /\.miyaip[\\/]/iu)
 })
 
 test('SEO guidance maps natural bilingual keywords into supported schema fields', async () => {

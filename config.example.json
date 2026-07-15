@@ -1,3 +1,6 @@
 {
-  "tokenFile": "C:\\Users\\<username>\\.miyaip-secrets\\sanity-token.txt"
+  "projectId": "pcjr7pm7",
+  "dataset": "production",
+  "apiVersion": "2026-07-05",
+  "sanityToken": ""
 }

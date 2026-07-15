@@ -144,7 +144,10 @@ export async function runPublishingCommand(
     throw new ArgumentError('操作必须是 probe 或 publish。')
   }
   const workspace = await verifyWorkspace({workspaceRoot})
-  const {token} = await loadPublishingConfig(configOptions)
+  const publishingConfig = await loadPublishingConfig(configOptions)
+  const requestCredentials = publishingConfig.sanityToken
+    ? {publishingConfig}
+    : {token: publishingConfig.token}
   const snapshot = await prepareArticleSnapshot(articlePath, {blogRoot: workspace.blogRoot})
   await assertOperationBundle(operation, snapshot, workspace.blogRoot)
   await validateOutput(articlePath, {workspaceRoot})
@@ -158,7 +161,7 @@ export async function runPublishingCommand(
     })
     const dryRun = await requestArticle('dry-run', articlePath, {
       blogRoot: workspace.blogRoot,
-      token,
+      ...requestCredentials,
       fetchImpl,
       snapshot,
       timeoutMs,
@@ -174,14 +177,14 @@ export async function runPublishingCommand(
   })
   const dryRun = await requestArticle('dry-run', articlePath, {
     blogRoot: workspace.blogRoot,
-    token,
+    ...requestCredentials,
     fetchImpl,
     snapshot,
     timeoutMs,
   })
   const created = await requestArticle('create', articlePath, {
     blogRoot: workspace.blogRoot,
-    token,
+    ...requestCredentials,
     fetchImpl,
     snapshot,
     timeoutMs,

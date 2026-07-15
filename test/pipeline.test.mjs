@@ -10,6 +10,12 @@ import {
   runPublishingCommand,
 } from '../skill/research-publish-sanity-blog/scripts/publish-output.mjs'
 
+const SANITY_TARGET = Object.freeze({
+  projectId: 'pcjr7pm7',
+  dataset: 'production',
+  apiVersion: '2026-07-05',
+})
+
 function article() {
   return {
     title: {en: 'QUIC Guide', zh: 'QUIC 指南'},
@@ -64,17 +70,18 @@ async function fixture() {
   delete stagingArticle.coverImage
   const probeArticlePath = path.join(blogRoot, '.staging', 'quic-guide.json')
   await writeFile(probeArticlePath, `${JSON.stringify(stagingArticle, null, 2)}\n`)
-  const tokenFile = path.join(secrets, 'sanity-token.txt')
-  const configPath = path.join(projectRoot, 'config.local.json')
-  await writeFile(tokenFile, 'opaque-pipeline-token\n', {mode: 0o600})
-  await writeFile(configPath, `${JSON.stringify({tokenFile})}\n`)
+  const configPath = path.join(secrets, 'config.json')
+  await writeFile(
+    configPath,
+    `${JSON.stringify({...SANITY_TARGET, sanityToken: 'opaque-pipeline-token'}, null, 2)}\n`,
+    {mode: 0o600},
+  )
   return {
     root,
     workspaceRoot,
     blogRoot,
     projectRoot,
     configPath,
-    tokenFile,
     articlePath,
     probeArticlePath,
   }
@@ -93,7 +100,13 @@ function successResponse(url) {
   if (url.endsWith('?dryRun=true')) {
     return new Response(
       JSON.stringify({
-        data: {status: 'dry-run', mode: 'create', slug: 'quic-guide', uploadedAssetIds: []},
+        data: {
+          status: 'dry-run',
+          mode: 'create',
+          slug: 'quic-guide',
+          uploadedAssetIds: [],
+          target: SANITY_TARGET,
+        },
         requestId: 'dry-id',
       }),
       {status: 200, headers: {'content-type': 'application/json'}},
@@ -108,6 +121,7 @@ function successResponse(url) {
         revision: 'created-rev',
         slug: 'quic-guide',
         uploadedAssetIds: [],
+        target: SANITY_TARGET,
       },
       requestId: 'create-id',
     }),
@@ -139,6 +153,9 @@ test('probe performs public validation then dry-run without creating', async () 
   ])
   assert.equal(calls[0].init.headers['X-Sanity-Token'], undefined)
   assert.equal(calls[1].init.headers['X-Sanity-Token'], 'opaque-pipeline-token')
+  assert.equal(calls[1].init.headers['X-Sanity-Project-Id'], 'pcjr7pm7')
+  assert.equal(calls[1].init.headers['X-Sanity-Dataset'], 'production')
+  assert.equal(calls[1].init.headers['X-Sanity-Api-Version'], '2026-07-05')
 })
 
 test('publish enforces validation then dry-run then one create request', async () => {
@@ -166,6 +183,7 @@ test('publish enforces validation then dry-run then one create request', async (
   assert.equal(calls[0].init.headers['X-Sanity-Token'], undefined)
   assert.equal(calls[1].init.headers['X-Sanity-Token'], 'opaque-pipeline-token')
   assert.equal(calls[2].init.headers['X-Sanity-Token'], 'opaque-pipeline-token')
+  assert.equal(calls[2].init.headers['X-Sanity-Project-Id'], 'pcjr7pm7')
 })
 
 test('publish stops before create when dry-run fails', async () => {

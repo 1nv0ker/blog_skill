@@ -22,7 +22,7 @@
     },
     {
       "id": "missing-token-configuration",
-      "prompt": "$research-publish-sanity-blog QUIC, with config.local.json absent.",
+      "prompt": "$research-publish-sanity-blog QUIC, with ~/.sanity-blog/config.json absent.",
       "expectations": [
         "Runs secret preflight before browsing and creates no files when configuration is missing.",
         "Requests only an external token-file path and reminds the user to rotate previously shared credentials."

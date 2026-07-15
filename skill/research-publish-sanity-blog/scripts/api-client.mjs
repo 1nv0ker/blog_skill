@@ -15,6 +15,9 @@ const SAFE_REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u
 const SAFE_ERROR_CODE = /^[A-Z][A-Z0-9_]{0,127}$/u
 const SAFE_RESULT_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u
 const SAFE_ASSET_ID = /^image-[A-Za-z0-9]+-[0-9]+x[0-9]+-[A-Za-z0-9]+$/u
+const PROJECT_ID_PATTERN = /^[a-z0-9]{1,64}$/u
+const DATASET_PATTERN = /^[A-Za-z0-9_-]{1,64}$/u
+const API_VERSION_PATTERN = /^\d{4}-\d{2}-\d{2}$/u
 const SNAPSHOT_BRAND = Symbol('article-request-snapshot')
 
 const MIME_TYPES = new Map([
@@ -272,6 +275,46 @@ function validateToken(token) {
   }
 }
 
+function isStrictCalendarDate(value) {
+  if (!API_VERSION_PATTERN.test(value)) return false
+  const [year, month, day] = value.split('-').map(Number)
+  const date = new Date(Date.UTC(year, month - 1, day))
+  return (
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day
+  )
+}
+
+function validatePublishingConfig(config) {
+  if (
+    !config ||
+    typeof config !== 'object' ||
+    !PROJECT_ID_PATTERN.test(config.projectId) ||
+    !DATASET_PATTERN.test(config.dataset) ||
+    !isStrictCalendarDate(config.apiVersion)
+  ) {
+    throw new ClientError('SANITY_TARGET_INVALID', 'Sanity target configuration is invalid.')
+  }
+  validateToken(config.sanityToken)
+  return {
+    projectId: config.projectId,
+    dataset: config.dataset,
+    apiVersion: config.apiVersion,
+    sanityToken: config.sanityToken,
+  }
+}
+
+function matchesTarget(value, expected) {
+  return (
+    value &&
+    typeof value === 'object' &&
+    value.projectId === expected.projectId &&
+    value.dataset === expected.dataset &&
+    value.apiVersion === expected.apiVersion
+  )
+}
+
 function doesNotContainSecret(value, token) {
   return typeof token !== 'string' || token.length === 0 || !value.includes(token)
 }
@@ -305,12 +348,13 @@ function validUploadedAssetIds(ids, token) {
   )
 }
 
-function sanitizeSuccessEnvelope(operation, payload, expectedSlug, token) {
+function sanitizeSuccessEnvelope(operation, payload, expectedSlug, token, expectedTarget) {
   if (!payload || typeof payload !== 'object' || !validRequestId(payload.requestId, token)) {
     return undefined
   }
   const data = payload.data
   if (!data || typeof data !== 'object' || data.slug !== expectedSlug) return undefined
+  if (expectedTarget && !matchesTarget(data.target, expectedTarget)) return undefined
 
   if (operation === 'validate') {
     if (
@@ -346,6 +390,7 @@ function sanitizeSuccessEnvelope(operation, payload, expectedSlug, token) {
         mode: 'create',
         slug: expectedSlug,
         uploadedAssetIds: [...data.uploadedAssetIds],
+        ...(expectedTarget ? {target: {...expectedTarget}} : {}),
       },
       requestId: payload.requestId,
     }
@@ -367,6 +412,7 @@ function sanitizeSuccessEnvelope(operation, payload, expectedSlug, token) {
       revision: data.revision,
       slug: expectedSlug,
       uploadedAssetIds: [...data.uploadedAssetIds],
+      ...(expectedTarget ? {target: {...expectedTarget}} : {}),
     },
     requestId: payload.requestId,
   }
@@ -437,6 +483,7 @@ export async function requestArticle(
   {
     blogRoot,
     token,
+    publishingConfig,
     snapshot,
     fetchImpl = globalThis.fetch,
     timeoutMs = REQUEST_TIMEOUT_MS,
@@ -448,9 +495,24 @@ export async function requestArticle(
     ? materializeArticleSnapshot(snapshot)
     : await buildArticleRequest(articlePath, {blogRoot})
   const headers = {...request.headers}
+  let expectedTarget
   if (operation !== 'validate') {
-    validateToken(token)
-    headers['X-Sanity-Token'] = token
+    if (publishingConfig !== undefined) {
+      const config = validatePublishingConfig(publishingConfig)
+      token = config.sanityToken
+      expectedTarget = {
+        projectId: config.projectId,
+        dataset: config.dataset,
+        apiVersion: config.apiVersion,
+      }
+      headers['X-Sanity-Project-Id'] = config.projectId
+      headers['X-Sanity-Dataset'] = config.dataset
+      headers['X-Sanity-Api-Version'] = config.apiVersion
+      headers['X-Sanity-Token'] = config.sanityToken
+    } else {
+      validateToken(token)
+      headers['X-Sanity-Token'] = token
+    }
   }
 
   let response
@@ -480,7 +542,13 @@ export async function requestArticle(
   }
 
   const expectedStatus = operation === 'create' ? 201 : 200
-  const sanitized = sanitizeSuccessEnvelope(operation, payload, request.article.slug, token)
+  const sanitized = sanitizeSuccessEnvelope(
+    operation,
+    payload,
+    request.article.slug,
+    token,
+    expectedTarget,
+  )
   if (response.status !== expectedStatus || !sanitized) {
     throw new PublisherApiError({
       statusCode: response.status,
