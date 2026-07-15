@@ -60,12 +60,12 @@
   },
   "seo": {
     "title": {
-      "en": "Replace with the English SEO title",
-      "zh": "替换为中文 SEO 标题"
+      "en": "Primary keyword: supporting technical topic",
+      "zh": "主关键词：补充技术主题"
     },
     "description": {
-      "en": "Replace with a concise English SEO description.",
-      "zh": "替换为简洁的中文 SEO 描述。"
+      "en": "Explain the primary keyword with semantic and long-tail terms naturally.",
+      "zh": "自然说明主关键词，并覆盖相关语义词和长尾词。"
     }
   }
 }

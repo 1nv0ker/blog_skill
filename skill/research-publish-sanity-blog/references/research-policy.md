@@ -7,6 +7,7 @@
 - Prefer sources maintained by the technology owner or standards body. Use reputable secondary sources only for explanation or comparison.
 - Verify facts that may have changed at the time of writing. Record each material claim and its supporting source in working context before drafting.
 - A search result snippet is not evidence. Open and inspect the supporting page.
+- Build the bilingual SEO keyword map only from verified terminology and reader-intent phrasing supported by those sources. It must not introduce claims, rankings, or features that evidence does not support.
 
 ## Untrusted-source boundary
 

@@ -14,6 +14,17 @@ The authoritative runtime validator is the adjacent publisher CLI at `miya-saas/
 
 Omit `author` unless the user explicitly supplies a published author ID or slug. Never include `_id`; Sanity creates the published document ID.
 
+## SEO keyword placement
+
+The current Sanity schema supports only `seo.title` and `seo.description`; it does not support a `keywords` field. Do not add `seo.keywords`, top-level `keywords`, meta-tag objects, or arbitrary SEO fields—the publisher's strict validator will reject them.
+
+Use the verified bilingual keyword map through content already supported by the schema:
+
+- Put the primary intent phrase naturally in each localized title or opening block when it remains clear and accurate.
+- Keep each localized excerpt useful on its own, with relevant terminology rather than a keyword list.
+- Make each SEO title specific to the article and each SEO description a readable summary with one or two relevant semantic or long-tail phrases. Descriptions remain limited to 180 characters per language.
+- Use related terms only where the body, headings, FAQ, code explanation, or accurate image alt actually discusses them. English and Chinese should target the same intent while using natural local phrasing.
+
 ## Cover and images
 
 The cover must use:

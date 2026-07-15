@@ -98,6 +98,9 @@ test('project README contains only safe local Skill installation instructions', 
   assert.match(readme, /research-publish-sanity-blog/u)
   assert.match(readme, /目录联接|junction/iu)
   assert.match(readme, /\$research-publish-sanity-blog/u)
+  assert.match(readme, /<skill-source-directory>/u)
+  assert.match(readme, /CODEX_HOME/u)
+  assert.doesNotMatch(readme, /C:\\work|C:\\Users\\zglxi/u)
   assert.doesNotMatch(readme, /config\.local\.json|npm test|npm audit/u)
   assert.deepEqual(Object.keys(JSON.parse(example)), ['tokenFile'])
   assert.doesNotMatch(`${readme}\n${example}`, /skrqbOU4|X-Sanity-Token:\s*\S{20,}/u)
@@ -107,4 +110,25 @@ test('runtime files hard-code only the approved publisher origin', async () => {
   const apiClient = await readFile(path.join(skillRoot, 'scripts', 'api-client.mjs'), 'utf8')
   assert.match(apiClient, /https:\/\/publish\.miyaip\.com/u)
   assert.doesNotMatch(apiClient, /publisher\.example\.com|process\.env/u)
+})
+
+test('SEO guidance maps natural bilingual keywords into supported schema fields', async () => {
+  const workflow = await readFile(
+    path.join(skillRoot, 'references', 'editorial-workflow.md'),
+    'utf8',
+  )
+  const contract = await readFile(
+    path.join(skillRoot, 'references', 'article-contract.md'),
+    'utf8',
+  )
+  const template = JSON.parse(
+    await readFile(path.join(skillRoot, 'assets', 'blog-post.template.json'), 'utf8'),
+  )
+
+  assert.match(workflow, /primary keyword/u)
+  assert.match(workflow, /semantic|long-tail/u)
+  assert.match(contract, /does not support.*keywords/u)
+  assert.equal('keywords' in template.seo, false)
+  assert.match(template.seo.description.en, /primary keyword/u)
+  assert.match(template.seo.description.zh, /主关键词/u)
 })
