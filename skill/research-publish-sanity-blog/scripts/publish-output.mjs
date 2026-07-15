@@ -4,7 +4,7 @@ import {lstat, readFile, realpath} from 'node:fs/promises'
 import path from 'node:path'
 import {fileURLToPath} from 'node:url'
 
-import {prepareArticleSnapshot, requestArticle} from './api-client.mjs'
+import {PublisherApiError, prepareArticleSnapshot, requestArticle} from './api-client.mjs'
 import {loadPublishingConfig} from './config.mjs'
 import {validateOutput} from './validate-output.mjs'
 import {WORKSPACE_ROOT, verifyWorkspace} from './workspace.mjs'
@@ -130,6 +130,26 @@ export function parsePublishingArguments(args) {
   return {operation: args[0], articlePath: args[1]}
 }
 
+function isPublishedSlugConflict(error) {
+  return (
+    error instanceof PublisherApiError &&
+    error.statusCode === 409 &&
+    error.code === 'PUBLISH_CONFLICT'
+  )
+}
+
+async function selectRemoteOperation(articlePath, requestOptions) {
+  try {
+    const dryRun = await requestArticle('dry-run', articlePath, requestOptions)
+    return {mode: 'create', dryRun}
+  } catch (error) {
+    if (!isPublishedSlugConflict(error)) throw error
+  }
+
+  const dryRun = await requestArticle('update-dry-run', articlePath, requestOptions)
+  return {mode: 'update', dryRun}
+}
+
 export async function runPublishingCommand(
   operation,
   articlePath,
@@ -160,14 +180,20 @@ export async function runPublishingCommand(
       snapshot,
       timeoutMs,
     })
-    const dryRun = await requestArticle('dry-run', articlePath, {
+    const selection = await selectRemoteOperation(articlePath, {
       blogRoot: workspace.blogRoot,
       ...requestCredentials,
       fetchImpl,
       snapshot,
       timeoutMs,
     })
-    return {operation, slug: dryRun.data.slug, validation, dryRun}
+    return {
+      operation,
+      mode: selection.mode,
+      slug: selection.dryRun.data.slug,
+      validation,
+      dryRun: selection.dryRun,
+    }
   }
 
   const validation = await requestArticle('validate', articlePath, {
@@ -177,21 +203,40 @@ export async function runPublishingCommand(
     snapshot,
     timeoutMs,
   })
-  const dryRun = await requestArticle('dry-run', articlePath, {
+  const selection = await selectRemoteOperation(articlePath, {
     blogRoot: workspace.blogRoot,
     ...requestCredentials,
     fetchImpl,
     snapshot,
     timeoutMs,
   })
-  const created = await requestArticle('create', articlePath, {
+  const result = await requestArticle(selection.mode, articlePath, {
     blogRoot: workspace.blogRoot,
     ...requestCredentials,
     fetchImpl,
     snapshot,
     timeoutMs,
+    ...(selection.mode === 'update'
+      ? {expectedRevision: selection.dryRun.data.revision}
+      : {}),
   })
-  return {operation, slug: created.data.slug, validation, dryRun, created}
+  if (selection.mode === 'update' && result.data.id !== selection.dryRun.data.id) {
+    throw new PublisherApiError({
+      statusCode: 200,
+      code: 'API_RESPONSE_INVALID',
+      requestId: result.requestId,
+      uploadedAssetIds: result.data.uploadedAssetIds,
+    })
+  }
+  return {
+    operation,
+    mode: selection.mode,
+    slug: result.data.slug,
+    validation,
+    dryRun: selection.dryRun,
+    result,
+    ...(selection.mode === 'create' ? {created: result} : {updated: result}),
+  }
 }
 
 function safeError(error) {

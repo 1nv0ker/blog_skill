@@ -179,6 +179,101 @@ test('dry-run and create send the token only in X-Sanity-Token and validate enve
   }
 })
 
+test('hidden update operations use PUT with the article slug and validate update envelopes', async () => {
+  const f = await fixture()
+  const calls = []
+  const fetchImpl = async (url, init) => {
+    calls.push({url, init})
+    const dryRun = url.endsWith('?dryRun=true')
+    return response({
+      data: dryRun
+        ? {
+            status: 'dry-run',
+            mode: 'update',
+            id: 'existing-post-id',
+            revision: 'existing-rev',
+            slug: 'webtransport-guide',
+            uploadedAssetIds: [],
+          }
+        : {
+            status: 'published',
+            mode: 'updated',
+            id: 'existing-post-id',
+            revision: 'updated-rev',
+            slug: 'webtransport-guide',
+            uploadedAssetIds: [],
+          },
+      requestId: dryRun ? 'update-dry-request' : 'update-request',
+    })
+  }
+
+  const dry = await requestArticle('update-dry-run', f.articlePath, {
+    blogRoot: f.blogRoot,
+    token: 'opaque-test-token',
+    fetchImpl,
+  })
+  const updated = await requestArticle('update', f.articlePath, {
+    blogRoot: f.blogRoot,
+    token: 'opaque-test-token',
+    expectedRevision: 'existing-rev',
+    fetchImpl,
+  })
+
+  assert.equal(dry.data.mode, 'update')
+  assert.equal(updated.data.mode, 'updated')
+  assert.deepEqual(
+    calls.map(({url, init}) => [url, init.method]),
+    [
+      [`${API_ORIGIN}/v1/blog-posts/webtransport-guide?dryRun=true`, 'PUT'],
+      [`${API_ORIGIN}/v1/blog-posts/webtransport-guide`, 'PUT'],
+    ],
+  )
+  for (const call of calls) {
+    assert.equal(call.init.headers['X-Sanity-Token'], 'opaque-test-token')
+    assert.equal(call.init.redirect, 'error')
+    const sent = JSON.parse(Buffer.from(call.init.body).toString('utf8'))
+    assert.equal('publishedAt' in sent, false)
+  }
+  assert.equal(calls[0].init.headers['X-Sanity-If-Revision-Id'], undefined)
+  assert.equal(calls[1].init.headers['X-Sanity-If-Revision-Id'], 'existing-rev')
+})
+
+test('final update requires the exact revision returned by a valid update dry-run', async () => {
+  const f = await fixture()
+  let attempts = 0
+  await assert.rejects(
+    requestArticle('update', f.articlePath, {
+      blogRoot: f.blogRoot,
+      token: 'opaque-test-token',
+      fetchImpl: async () => {
+        attempts += 1
+        throw new Error('must not fetch')
+      },
+    }),
+    (error) => error.code === 'SANITY_REVISION_REQUIRED',
+  )
+  assert.equal(attempts, 0)
+
+  await assert.rejects(
+    requestArticle('update-dry-run', f.articlePath, {
+      blogRoot: f.blogRoot,
+      token: 'opaque-test-token',
+      fetchImpl: async () =>
+        response({
+          data: {
+            status: 'dry-run',
+            mode: 'update',
+            id: 'existing-post-id',
+            slug: 'webtransport-guide',
+            uploadedAssetIds: [],
+          },
+          requestId: 'missing-revision',
+        }),
+    }),
+    (error) => error.code === 'API_RESPONSE_INVALID',
+  )
+})
+
 test('multipart request uploads each referenced local asset exactly once', async () => {
   const document = article()
   document.coverImage = {
@@ -202,6 +297,41 @@ test('multipart request uploads each referenced local asset exactly once', async
   assert.equal(request.localAssets.length, 1)
   assert.equal([...request.body.keys()].filter((key) => key === 'article').length, 1)
   assert.equal([...request.body.keys()].filter((key) => key === 'assets').length, 1)
+})
+
+test('hidden update keeps multipart assets while omitting publishedAt from its article part', async () => {
+  const document = article()
+  document.coverImage = {
+    source: {path: './assets/webtransport-guide-cover.png'},
+    alt: {en: 'Cover', zh: '封面'},
+  }
+  const f = await fixture(document)
+  await writeFile(
+    path.join(f.assets, 'webtransport-guide-cover.png'),
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+  )
+
+  await requestArticle('update-dry-run', f.articlePath, {
+    blogRoot: f.blogRoot,
+    token: 'opaque-test-token',
+    fetchImpl: async (_url, init) => {
+      assert.ok(init.body instanceof FormData)
+      assert.equal([...init.body.keys()].filter((key) => key === 'assets').length, 1)
+      const sent = JSON.parse(await init.body.get('article').text())
+      assert.equal('publishedAt' in sent, false)
+      return response({
+        data: {
+          status: 'dry-run',
+          mode: 'update',
+          id: 'existing-post-id',
+          revision: 'existing-rev',
+          slug: 'webtransport-guide',
+          uploadedAssetIds: [],
+        },
+        requestId: 'multipart-update-dry-run',
+      })
+    },
+  })
 })
 
 test('rejects unsafe, missing, symlinked, excessive, and unreferenced article locations', async (t) => {
@@ -436,19 +566,22 @@ test('asset references stay JSON-only while invalid signatures and excess image 
   )
 })
 
-test('a network failure performs exactly one production attempt', async () => {
+test('a network failure performs exactly one create or update production attempt', async () => {
   const f = await fixture()
-  let attempts = 0
-  await assert.rejects(
-    requestArticle('create', f.articlePath, {
-      blogRoot: f.blogRoot,
-      token: 'opaque-test-token',
-      fetchImpl: async () => {
-        attempts += 1
-        throw new Error('network down')
-      },
-    }),
-    (error) => error.code === 'NETWORK_RESULT_UNKNOWN',
-  )
-  assert.equal(attempts, 1)
+  for (const operation of ['create', 'update']) {
+    let attempts = 0
+    await assert.rejects(
+      requestArticle(operation, f.articlePath, {
+        blogRoot: f.blogRoot,
+        token: 'opaque-test-token',
+        ...(operation === 'update' ? {expectedRevision: 'existing-rev'} : {}),
+        fetchImpl: async () => {
+          attempts += 1
+          throw new Error('network down')
+        },
+      }),
+      (error) => error.code === 'NETWORK_RESULT_UNKNOWN',
+    )
+    assert.equal(attempts, 1)
+  }
 })

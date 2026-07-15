@@ -6,7 +6,7 @@ The authoritative runtime validator is the adjacent publisher CLI at `miya-saas/
 
 - `title.en` and `title.zh`: non-empty localized titles.
 - `slug`: ASCII kebab-case, maximum 96 characters.
-- `publishedAt`: current UTC ISO-8601 timestamp for a new article.
+- `publishedAt`: current UTC ISO-8601 timestamp for a new article. During an update, preserve the existing value or omit the field so Sanity keeps it.
 - `excerpt.en` and `excerpt.zh`: non-empty, each at most 240 characters.
 - `body.en` and `body.zh`: non-empty Portable Text arrays.
 - `seo.title.en`, `seo.title.zh`, `seo.description.en`, and `seo.description.zh`: all required when SEO is included; each description is at most 180 characters.
@@ -54,4 +54,6 @@ Each language body ends with a localized Sources/来源 heading and a list of di
 
 ## Update semantics
 
-This skill creates new posts only. It never adds update fields, never sends PUT, and never changes an existing document. A slug collision is resolved by selecting a new `-vN` slug.
+Create/update selection is hidden inside deterministic helpers; the user and model do not pass an update flag. A sanitized create dry-run conflict may be followed by one PUT dry-run, and only a successful `mode: update` response for the same slug and target permits one production PUT.
+
+On update, required fields (`title`, `slug`, `excerpt`, and `body`) are replaced as a complete validated set. For optional `author`, `coverImage`, and `seo`, omission preserves the remote value, `null` removes it, and an object replaces it. This Skill normally regenerates and replaces the cover and SEO while preserving an intentionally retained author. The deterministic request helper omits `publishedAt` from update dry-runs and PUT requests so the remote timestamp is preserved even when a remote collision is discovered after local drafting. The API uses the current Sanity revision as a precondition; revision, draft, Release, ambiguity, or missing-document conflicts stop without retry or fallback to create.

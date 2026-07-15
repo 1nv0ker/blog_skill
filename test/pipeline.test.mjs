@@ -88,7 +88,16 @@ async function fixture() {
   }
 }
 
-function successResponse(url) {
+function configOptions(f) {
+  return {
+    configPath: f.configPath,
+    projectRoot: f.projectRoot,
+    repositoryRoot: f.workspaceRoot,
+    permissionChecker: async () => {},
+  }
+}
+
+function successResponse(url, init = {}) {
   if (url.endsWith('/v1/blog-post-validations')) {
     return new Response(
       JSON.stringify({
@@ -99,16 +108,36 @@ function successResponse(url) {
     )
   }
   if (url.endsWith('?dryRun=true')) {
+    const update = init.method === 'PUT'
     return new Response(
       JSON.stringify({
         data: {
           status: 'dry-run',
-          mode: 'create',
+          mode: update ? 'update' : 'create',
+          ...(update ? {id: 'existing-id'} : {}),
+          ...(update ? {revision: 'existing-rev'} : {}),
           slug: 'quic-guide',
           uploadedAssetIds: [],
           target: SANITY_TARGET,
         },
         requestId: 'dry-id',
+      }),
+      {status: 200, headers: {'content-type': 'application/json'}},
+    )
+  }
+  if (init.method === 'PUT') {
+    return new Response(
+      JSON.stringify({
+        data: {
+          status: 'published',
+          mode: 'updated',
+          id: 'existing-id',
+          revision: 'updated-rev',
+          slug: 'quic-guide',
+          uploadedAssetIds: [],
+          target: SANITY_TARGET,
+        },
+        requestId: 'update-id',
       }),
       {status: 200, headers: {'content-type': 'application/json'}},
     )
@@ -135,14 +164,10 @@ test('probe performs public validation then dry-run without creating', async () 
   const calls = []
   const result = await runPublishingCommand('probe', f.probeArticlePath, {
     workspaceRoot: f.workspaceRoot,
-    configOptions: {
-      configPath: f.configPath,
-      projectRoot: f.projectRoot,
-      repositoryRoot: f.workspaceRoot,
-    },
+    configOptions: configOptions(f),
     fetchImpl: async (url, init) => {
       calls.push({url, init})
-      return successResponse(url)
+      return successResponse(url, init)
     },
   })
 
@@ -164,14 +189,10 @@ test('publish enforces validation then dry-run then one create request', async (
   const calls = []
   const result = await runPublishingCommand('publish', f.articlePath, {
     workspaceRoot: f.workspaceRoot,
-    configOptions: {
-      configPath: f.configPath,
-      projectRoot: f.projectRoot,
-      repositoryRoot: f.workspaceRoot,
-    },
+    configOptions: configOptions(f),
     fetchImpl: async (url, init) => {
       calls.push({url, init})
-      return successResponse(url)
+      return successResponse(url, init)
     },
   })
 
@@ -187,34 +208,97 @@ test('publish enforces validation then dry-run then one create request', async (
   assert.equal(calls[2].init.headers['X-Sanity-Project-Id'], 'pcjr7pm7')
 })
 
-test('publish stops before create when dry-run fails', async () => {
+test('publish hides update selection behind create conflict, PUT dry-run, and one PUT', async () => {
+  const f = await fixture()
+  const calls = []
+  const result = await runPublishingCommand('publish', f.articlePath, {
+    workspaceRoot: f.workspaceRoot,
+    configOptions: configOptions(f),
+    fetchImpl: async (url, init) => {
+      calls.push({url, init})
+      if (url.endsWith('/v1/blog-posts?dryRun=true')) {
+        return new Response(
+          JSON.stringify({
+            error: {code: 'PUBLISH_CONFLICT', message: 'slug exists'},
+            requestId: 'conflict-id',
+          }),
+          {status: 409, headers: {'content-type': 'application/json'}},
+        )
+      }
+      return successResponse(url, init)
+    },
+  })
+
+  assert.equal(result.mode, 'update')
+  assert.equal(result.updated.data.revision, 'updated-rev')
+  assert.deepEqual(
+    calls.map(({url, init}) => [url, init.method]),
+    [
+      [`${API_ORIGIN}/v1/blog-post-validations`, 'POST'],
+      [`${API_ORIGIN}/v1/blog-posts?dryRun=true`, 'POST'],
+      [`${API_ORIGIN}/v1/blog-posts/quic-guide?dryRun=true`, 'PUT'],
+      [`${API_ORIGIN}/v1/blog-posts/quic-guide`, 'PUT'],
+    ],
+  )
+  assert.equal(calls[2].init.headers['X-Sanity-If-Revision-Id'], undefined)
+  assert.equal(calls[3].init.headers['X-Sanity-If-Revision-Id'], 'existing-rev')
+})
+
+test('publish stops without mutation when the hidden PUT dry-run also conflicts', async () => {
   const f = await fixture()
   const calls = []
   await assert.rejects(
     runPublishingCommand('publish', f.articlePath, {
       workspaceRoot: f.workspaceRoot,
-      configOptions: {
-        configPath: f.configPath,
-        projectRoot: f.projectRoot,
-        repositoryRoot: f.workspaceRoot,
-      },
+      configOptions: configOptions(f),
       fetchImpl: async (url, init) => {
         calls.push({url, init})
         if (url.endsWith('?dryRun=true')) {
           return new Response(
             JSON.stringify({
-              error: {code: 'PUBLISH_CONFLICT', message: 'slug exists'},
-              requestId: 'conflict-id',
+              error: {code: 'PUBLISH_CONFLICT', message: 'unsafe conflict'},
+              requestId: init.method === 'PUT' ? 'update-conflict' : 'create-conflict',
             }),
             {status: 409, headers: {'content-type': 'application/json'}},
           )
         }
-        return successResponse(url)
+        return successResponse(url, init)
       },
     }),
-    (error) => error.code === 'PUBLISH_CONFLICT' && error.requestId === 'conflict-id',
+    (error) => error.code === 'PUBLISH_CONFLICT' && error.requestId === 'update-conflict',
   )
-  assert.equal(calls.length, 2)
+  assert.equal(calls.length, 3)
+})
+
+test('hidden update rejects a document ID change between dry-run and the single PUT result', async () => {
+  const f = await fixture()
+  await assert.rejects(
+    runPublishingCommand('publish', f.articlePath, {
+      workspaceRoot: f.workspaceRoot,
+      configOptions: configOptions(f),
+      fetchImpl: async (url, init) => {
+        if (url.endsWith('/v1/blog-posts?dryRun=true')) {
+          return new Response(
+            JSON.stringify({
+              error: {code: 'PUBLISH_CONFLICT', message: 'slug exists'},
+              requestId: 'create-conflict',
+            }),
+            {status: 409, headers: {'content-type': 'application/json'}},
+          )
+        }
+        if (init.method === 'PUT' && !url.endsWith('?dryRun=true')) {
+          const changed = await successResponse(url, init).json()
+          changed.data.id = 'different-id'
+          return new Response(JSON.stringify(changed), {
+            status: 200,
+            headers: {'content-type': 'application/json'},
+          })
+        }
+        return successResponse(url, init)
+      },
+    }),
+    (error) => error.code === 'API_RESPONSE_INVALID',
+  )
 })
 
 test('publish validates, dry-runs, and creates from one immutable article snapshot', async () => {
@@ -225,11 +309,7 @@ test('publish validates, dry-runs, and creates from one immutable article snapsh
 
   await runPublishingCommand('publish', f.articlePath, {
     workspaceRoot: f.workspaceRoot,
-    configOptions: {
-      configPath: f.configPath,
-      projectRoot: f.projectRoot,
-      repositoryRoot: f.workspaceRoot,
-    },
+    configOptions: configOptions(f),
     fetchImpl: async (url, init) => {
       const articlePart = init.body instanceof FormData ? init.body.get('article') : init.body
       const sent = JSON.parse(
@@ -241,7 +321,7 @@ test('publish validates, dry-runs, and creates from one immutable article snapsh
       if (url.endsWith('/v1/blog-post-validations')) {
         await writeFile(f.articlePath, `${JSON.stringify(changed, null, 2)}\n`)
       }
-      return successResponse(url)
+      return successResponse(url, init)
     },
   })
 
@@ -252,12 +332,8 @@ test('probe accepts staging only while publish requires final Markdown and exact
   const f = await fixture()
   const common = {
     workspaceRoot: f.workspaceRoot,
-    configOptions: {
-      configPath: f.configPath,
-      projectRoot: f.projectRoot,
-      repositoryRoot: f.workspaceRoot,
-    },
-    fetchImpl: async (url) => successResponse(url),
+    configOptions: configOptions(f),
+    fetchImpl: async (url, init) => successResponse(url, init),
   }
 
   await assert.rejects(

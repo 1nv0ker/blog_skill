@@ -8,7 +8,7 @@
         "Uses at least 3 credible sources, including available primary sources.",
         "Creates semantically aligned polished English and Chinese Markdown and Sanity JSON.",
         "Generates and validates an original landscape cover with no text or watermark.",
-        "Runs local validation, remote dry-run, and exactly one create POST without PUT."
+        "Runs local validation, hidden remote operation selection, and exactly one production POST or PUT."
       ]
     },
     {
@@ -29,12 +29,12 @@
       ]
     },
     {
-      "id": "remote-slug-versioning",
-      "prompt": "$research-publish-sanity-blog WebRTC, where the base slug already exists remotely.",
+      "id": "hidden-existing-update",
+      "prompt": "$research-publish-sanity-blog WebRTC, where a complete local webrtc bundle and the published remote slug already exist.",
       "expectations": [
-        "Selects the first complete local and remote free slug such as webrtc-v2.",
-        "Tries no more than ten candidates, never overwrites local files, and never sends PUT.",
-        "Does not retry the final create POST after an uncertain result."
+        "Automatically prepares the existing bundle in private staging without asking the user for an update mode.",
+        "Preserves publishedAt, validates a PUT dry-run, binds its revision, and performs exactly one production PUT for the same slug.",
+        "Stops on draft, Release, ambiguity, revision, or uncertain mutation failures and never retries."
       ]
     }
   ]

@@ -1,7 +1,7 @@
 interface:
   display_name: "Research & Publish Sanity Blog"
-  short_description: "Research, polish, and publish bilingual Sanity blogs"
-  default_prompt: "Use $research-publish-sanity-blog to research WebTransport, create a polished bilingual article, and publish it to Sanity."
+  short_description: "Research, refresh, and publish bilingual Sanity blogs"
+  default_prompt: "Use $research-publish-sanity-blog to research WebTransport, create or refresh a polished bilingual article, and publish it to Sanity."
 
 policy:
   allow_implicit_invocation: false

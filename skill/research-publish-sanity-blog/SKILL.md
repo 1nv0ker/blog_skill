@@ -1,11 +1,11 @@
 ---
 name: research-publish-sanity-blog
-description: Research a named technology from authoritative web sources, draft and polish a bilingual English/Chinese technical article, generate an original cover and Sanity blog JSON, validate it, and publish it through the configured publisher API. Use only when the user explicitly invokes this skill to create and publish a new technology blog post.
+description: Research a named technology from authoritative web sources, draft and polish a bilingual English/Chinese technical article, generate an original cover and Sanity blog JSON, then automatically create or update and publish it through the configured publisher API. Use only when the user explicitly invokes this skill to publish a technology blog post.
 ---
 
 # Research and Publish a Sanity Blog
 
-Create one evidence-based bilingual technology article and publish it exactly once. Treat an explicit invocation of this skill as production-publish authorization; after all checks pass, no second confirmation is required.
+Create or refresh one evidence-based bilingual technology article and perform exactly one production mutation. Treat an explicit invocation of this skill as production-publish authorization; after all checks pass, no second confirmation or user-facing update flag is required.
 
 ## 1. Run the fixed external-config preflight before doing any work
 
@@ -39,7 +39,7 @@ Read [research-policy.md](references/research-policy.md). Ask a question only if
 - Stop if evidence is insufficient or material conflicts cannot be resolved. Never invent facts.
 - Do not copy long passages or use webpage images.
 
-## 3. Reserve a new slug
+## 3. Prepare the slug and let the helper select create or update
 
 Use ASCII kebab-case, at most 96 characters. Outputs are fixed under `C:\work\MIYA-LLC-WEB\miyaip2026\blog`:
 
@@ -47,13 +47,13 @@ Use ASCII kebab-case, at most 96 characters. Outputs are fixed under `C:\work\MI
 - `blog/<slug>.json`
 - `blog/assets/<slug>-cover.png`
 
-Ask the deterministic helper to atomically reserve all three paths and return the first complete free bundle:
+Ask the deterministic helper to inspect and atomically reserve the exact base slug:
 
 ```powershell
-node <skill-directory>\scripts\workspace.mjs reserve "<base-slug>"
+node <skill-directory>\scripts\workspace.mjs prepare "<base-slug>"
 ```
 
-If any output or reservation exists, the helper selects the `-vN` sequence (`-v2`, `-v3`, and so on through `-v10`). Keep its `reservationId`, `nextStartVersion`, staging paths, and final paths. Never write outside those returned paths, overwrite a file, or update an existing article.
+The helper returns `mode: create` when none of the three local files exists. When all three safe files already exist, it returns `mode: update` and copies the complete existing bundle into private staging; this selection is internal and must not be requested from the user. A partial, oversized, invalid-PNG, unsafe, symlinked, or concurrently reserved bundle is a hard stop. Keep the returned `reservationId`, staging paths, and final paths. Never write outside those returned paths or overwrite final files directly.
 
 ## 4. Draft, then polish
 
@@ -65,16 +65,16 @@ Keep the polished bilingual final in working context until remote slug preflight
 
 ## 5. Build and locally validate staging JSON
 
-Read [article-contract.md](references/article-contract.md) and start from [blog-post.template.json](assets/blog-post.template.json). Convert the polished Markdown to bilingual Portable Text with `block`, `image`, and `code` only. Use the keyword map in the supported bilingual title, excerpt, body, and SEO title/description fields; do not create a `keywords` property. Include bilingual title, excerpt, body, SEO, Sources/来源, and current UTC `publishedAt`. Omit author unless supplied by the user.
+Read [article-contract.md](references/article-contract.md) and start from [blog-post.template.json](assets/blog-post.template.json). Convert the polished Markdown to bilingual Portable Text with `block`, `image`, and `code` only. Use the keyword map in the supported bilingual title, excerpt, body, and SEO title/description fields; do not create a `keywords` property. Include bilingual title, excerpt, body, SEO, and Sources/来源. For `mode: create`, set current UTC `publishedAt`; for `mode: update`, preserve the existing value or omit it so the API preserves the remote value. Omit author unless supplied by the user or already intentionally retained.
 
-Before creating a cover, write the polished Markdown to the exact returned staging Markdown path. Generate the returned staging JSON from that Markdown without `coverImage`; Markdown must be written before JSON. Then run:
+Before creating a cover, write the polished Markdown to the exact returned staging Markdown path. Generate the returned staging JSON from that Markdown without `coverImage`, even when the update staging copy originally contained one; Markdown must be written before JSON. Then run:
 
 ```powershell
 node <skill-directory>\scripts\validate-output.mjs "<returned-staging-article-path>"
 node <skill-directory>\scripts\publish-output.mjs probe "<returned-staging-article-path>"
 ```
 
-`probe` performs the public API validation and a remote dry-run. It sends the configured Sanity target and token only from deterministic code, and requires the API response to echo the same `projectId`, `dataset`, and `apiVersion`. A missing or mismatched target echo is a hard stop before production. If probe reports HTTP 409, run `workspace.mjs release "<slug>" "<reservationId>"`, then reserve again with `workspace.mjs reserve "<base-slug>" --start=<nextStartVersion>`. Rewrite the two returned staging files with the new slug and repeat. Stop when `nextStartVersion` is null. Never send PUT.
+`probe` performs public API validation and hidden remote operation selection. It first performs a create dry-run; only a sanitized slug conflict permits one PUT update dry-run. The PUT dry-run must confirm one updateable published document with the same slug, document ID, revision, and configured target. Draft, Release, multiple-document, missing-document, or target conflicts stop the workflow. A missing or mismatched `projectId`, `dataset`, or `apiVersion` echo is also a hard stop. Do not ask the user to choose create/update, add `-vN`, or call the API manually.
 
 On any failure before commit, release only this run's reservation with its exact ID. Never delete staging or reservation paths manually.
 
@@ -90,6 +90,8 @@ node <skill-directory>\scripts\workspace.mjs commit "<slug>" "<reservationId>"
 
 Use only the final paths returned by `commit`, then run local validation on the final JSON once more.
 
+If commit reports `OUTPUT_RECOVERY_REQUIRED`, stop before every remote request and report that a preserved local backup needs recovery. Do not delete `.backup`, staging, or reservation files and do not retry the commit automatically.
+
 ## 7. Publish exactly once
 
 Read [publishing-contract.md](references/publishing-contract.md). Execute:
@@ -98,6 +100,6 @@ Read [publishing-contract.md](references/publishing-contract.md). Execute:
 node <skill-directory>\scripts\publish-output.mjs publish "C:\work\MIYA-LLC-WEB\miyaip2026\blog\<slug>.json"
 ```
 
-The deterministic helper performs public validation, a complete multipart dry-run, then one production POST. Do not call the API manually, override its origin, send PUT, or retry the final POST after any timeout, 409, 429, or 5xx response.
+The deterministic helper repeats validation and hidden remote selection from one immutable snapshot, then performs exactly one production mutation: POST for a new slug or PUT for an existing published slug. PUT is allowed only inside this helper after a successful update dry-run, and it binds that dry-run revision through `X-Sanity-If-Revision-Id`; a concurrent remote edit returns 409 before upload or patch. Do not call the API manually, override its origin, choose the method yourself, or retry the final POST/PUT after any timeout, 409, 429, or 5xx response.
 
 On success report document ID, revision, slug, and absolute paths to the Markdown, JSON, and cover. On failure report only the safe request ID, status/code, and `uploadedAssetIds` returned by the helper. Never expose upstream response bodies or the token.

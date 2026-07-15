@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import {mkdir, mkdtemp, readFile, writeFile} from 'node:fs/promises'
+import {lstat, mkdir, mkdtemp, readFile, rename, writeFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
@@ -10,6 +10,7 @@ import {
   bundlePaths,
   commitReservation,
   parseWorkspaceArguments,
+  prepareLocalBundle,
   releaseReservation,
   reserveLocalSlug,
   runWorkspaceCommand,
@@ -36,6 +37,17 @@ async function fixture() {
   )
   await writeFile(path.join(publisherRoot, 'src', 'cli.mjs'), 'process.exitCode = 0\n')
   return {workspaceRoot, blogRoot, publisherRoot}
+}
+
+async function writeBundle(blogRoot, slug, label = 'old') {
+  const paths = bundlePaths(slug, {blogRoot})
+  await writeFile(paths.markdown, `${label} markdown\n`)
+  await writeFile(paths.article, `${JSON.stringify({slug, label})}\n`)
+  await writeFile(
+    paths.cover,
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+  )
+  return paths
 }
 
 test('verifies the live publisher structurally without depending on its package name', async () => {
@@ -104,6 +116,22 @@ test('workspace command allocates a deterministic bundle from a requested versio
   assert.deepEqual(JSON.parse(output.join('')), result)
 })
 
+test('workspace command exposes automatic prepare without a create/update argument', async () => {
+  const f = await fixture()
+  assert.deepEqual(parseWorkspaceArguments(['prepare', 'webtransport']), {
+    operation: 'prepare',
+    baseSlug: 'webtransport',
+  })
+  const output = []
+  const result = await runWorkspaceCommand(['prepare', 'webtransport'], {
+    workspaceRoot: f.workspaceRoot,
+    log: (value) => output.push(value),
+  })
+  assert.equal(result.mode, 'create')
+  assert.equal(JSON.parse(output.join('')).mode, 'create')
+  await releaseReservation(result.slug, result.reservationId, {blogRoot: f.blogRoot})
+})
+
 test('workspace command rejects unsafe or exhausted start versions', () => {
   for (const args of [
     ['allocate', 'webtransport', '--start=0'],
@@ -164,6 +192,112 @@ test('reservation commit copies a complete staging bundle without overwriting', 
   )
   assert.equal(await readFile(blocked.paths.article, 'utf8'), 'existing')
   await releaseReservation(blocked.slug, blocked.reservationId, {blogRoot: f.blogRoot})
+})
+
+test('prepare automatically selects create or prefilled update without a user-facing mode flag', async () => {
+  const f = await fixture()
+  const created = await prepareLocalBundle('webtransport', {blogRoot: f.blogRoot})
+  assert.equal(created.mode, 'create')
+  await releaseReservation(created.slug, created.reservationId, {blogRoot: f.blogRoot})
+
+  const oldPaths = await writeBundle(f.blogRoot, 'quic')
+  const updating = await prepareLocalBundle('quic', {blogRoot: f.blogRoot})
+  assert.equal(updating.mode, 'update')
+  assert.equal(await readFile(updating.staging.markdown, 'utf8'), 'old markdown\n')
+  assert.equal(
+    JSON.parse(await readFile(updating.staging.article, 'utf8')).label,
+    'old',
+  )
+
+  await writeFile(updating.staging.markdown, 'new markdown\n')
+  await writeFile(updating.staging.article, `${JSON.stringify({slug: 'quic', label: 'new'})}\n`)
+  await writeFile(
+    updating.staging.cover,
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x01]),
+  )
+  const committed = await commitReservation('quic', updating.reservationId, {
+    blogRoot: f.blogRoot,
+  })
+  assert.equal(committed.mode, 'update')
+  assert.equal(await readFile(oldPaths.markdown, 'utf8'), 'new markdown\n')
+  assert.equal(JSON.parse(await readFile(oldPaths.article, 'utf8')).label, 'new')
+})
+
+test('prepare rejects partial bundles and update commit detects concurrent local changes', async () => {
+  const f = await fixture()
+  await writeFile(path.join(f.blogRoot, 'partial.md'), 'partial\n')
+  await assert.rejects(
+    prepareLocalBundle('partial', {blogRoot: f.blogRoot}),
+    (error) => error.code === 'LOCAL_BUNDLE_INCOMPLETE',
+  )
+
+  const paths = await writeBundle(f.blogRoot, 'http3')
+  const updating = await prepareLocalBundle('http3', {blogRoot: f.blogRoot})
+  await writeFile(updating.staging.markdown, 'new markdown\n')
+  await writeFile(updating.staging.article, `${JSON.stringify({slug: 'http3', label: 'new'})}\n`)
+  await writeFile(
+    updating.staging.cover,
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x01]),
+  )
+  await writeFile(paths.markdown, 'concurrent edit\n')
+  await assert.rejects(
+    commitReservation('http3', updating.reservationId, {blogRoot: f.blogRoot}),
+    (error) => error.code === 'OUTPUT_CHANGED',
+  )
+  assert.equal(await readFile(paths.markdown, 'utf8'), 'concurrent edit\n')
+  await releaseReservation('http3', updating.reservationId, {blogRoot: f.blogRoot})
+})
+
+test('prepare bounds existing bundle reads and validates the PNG cover before staging', async () => {
+  const f = await fixture()
+  const oversized = await writeBundle(f.blogRoot, 'oversized')
+  await writeFile(oversized.article, Buffer.alloc(2 * 1024 * 1024 + 1, 0x20))
+  await assert.rejects(
+    prepareLocalBundle('oversized', {blogRoot: f.blogRoot}),
+    (error) => error.code === 'LOCAL_BUNDLE_SIZE_INVALID',
+  )
+
+  const disguised = await writeBundle(f.blogRoot, 'disguised')
+  await writeFile(disguised.cover, 'not a png')
+  await assert.rejects(
+    prepareLocalBundle('disguised', {blogRoot: f.blogRoot}),
+    (error) => error.code === 'LOCAL_BUNDLE_COVER_INVALID',
+  )
+})
+
+test('failed rollback preserves the only recoverable backup', async () => {
+  const f = await fixture()
+  const paths = await writeBundle(f.blogRoot, 'rollback')
+  const updating = await prepareLocalBundle('rollback', {blogRoot: f.blogRoot})
+  await writeFile(updating.staging.markdown, 'new markdown\n')
+  await writeFile(updating.staging.article, `${JSON.stringify({slug: 'rollback', label: 'new'})}\n`)
+  await writeFile(
+    updating.staging.cover,
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x01]),
+  )
+
+  const backup = `${paths.markdown}.${updating.reservationId}.backup`
+  const renameImpl = async (source, destination) => {
+    if (
+      destination === paths.markdown &&
+      (source.endsWith('.next') || source.endsWith('.backup'))
+    ) {
+      throw new Error('simulated locked destination')
+    }
+    await rename(source, destination)
+  }
+  await assert.rejects(
+    commitReservation('rollback', updating.reservationId, {
+      blogRoot: f.blogRoot,
+      updateFileOps: {rename: renameImpl},
+    }),
+    (error) => error.code === 'OUTPUT_RECOVERY_REQUIRED',
+  )
+  assert.equal((await lstat(backup)).isFile(), true)
+  assert.equal(await readFile(backup, 'utf8'), 'old markdown\n')
+
+  await rename(backup, paths.markdown)
+  await releaseReservation('rollback', updating.reservationId, {blogRoot: f.blogRoot})
 })
 
 test('reservation commands expose the next untried version after local skips', async () => {

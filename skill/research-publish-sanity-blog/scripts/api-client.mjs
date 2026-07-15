@@ -12,6 +12,7 @@ const SAFE_ASSET_PATH = /^\.\/assets\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u
 const SAFE_REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u
 const SAFE_ERROR_CODE = /^[A-Z][A-Z0-9_]{0,127}$/u
 const SAFE_RESULT_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u
+const SAFE_REVISION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u
 const SAFE_ASSET_ID = /^image-[A-Za-z0-9]+-[0-9]+x[0-9]+-[A-Za-z0-9]+$/u
 const PROJECT_ID_PATTERN = /^[a-z0-9]{1,64}$/u
 const DATASET_PATTERN = /^[A-Za-z0-9_-]{1,64}$/u
@@ -254,6 +255,33 @@ function materializeArticleSnapshot(snapshot) {
   return {article: snapshot.article, body, headers: {}, localAssets: snapshot.localAssets}
 }
 
+function withoutPublishedAtForUpdate(request, operation, articleFilename) {
+  if (
+    !['update-dry-run', 'update'].includes(operation) ||
+    request.article.publishedAt === undefined
+  ) {
+    return request
+  }
+  const article = {...request.article}
+  delete article.publishedAt
+  const articleBytes = Buffer.from(`${JSON.stringify(article)}\n`, 'utf8')
+  if (request.localAssets.length === 0) {
+    return {
+      article,
+      body: articleBytes,
+      headers: {'Content-Type': 'application/json'},
+      localAssets: request.localAssets,
+    }
+  }
+
+  const body = new FormData()
+  body.append('article', new Blob([articleBytes], {type: 'application/json'}), articleFilename)
+  for (const asset of request.localAssets) {
+    body.append('assets', new Blob([asset.bytes], {type: asset.mimeType}), asset.filename)
+  }
+  return {article, body, headers: {}, localAssets: request.localAssets}
+}
+
 function normalizePublisherApiOrigin(value) {
   if (typeof value !== 'string' || value.length === 0 || value.length > 2048 || value.trim() !== value) {
     throw new ClientError('PUBLISHER_ORIGIN_INVALID', 'Publisher API origin is invalid.')
@@ -278,12 +306,19 @@ function normalizePublisherApiOrigin(value) {
   return url.origin
 }
 
-function endpoint(operation, publisherApiOrigin) {
+function endpoint(operation, publisherApiOrigin, slug) {
   const origin = normalizePublisherApiOrigin(publisherApiOrigin)
   if (operation === 'validate') return `${origin}/v1/blog-post-validations`
   if (operation === 'dry-run') return `${origin}/v1/blog-posts?dryRun=true`
   if (operation === 'create') return `${origin}/v1/blog-posts`
-  throw new ClientError('OPERATION_INVALID', '只允许 validate、dry-run 或 create。')
+  if (operation === 'update-dry-run') {
+    return `${origin}/v1/blog-posts/${encodeURIComponent(slug)}?dryRun=true`
+  }
+  if (operation === 'update') return `${origin}/v1/blog-posts/${encodeURIComponent(slug)}`
+  throw new ClientError(
+    'OPERATION_INVALID',
+    '只允许 validate、dry-run、create、update-dry-run 或 update。',
+  )
 }
 
 function validateToken(token) {
@@ -296,6 +331,16 @@ function validateToken(token) {
   ) {
     throw new ClientError('TOKEN_FORMAT_INVALID', 'Token 文件格式无效。')
   }
+}
+
+function validateExpectedRevision(revision) {
+  if (typeof revision !== 'string' || !SAFE_REVISION_ID.test(revision)) {
+    throw new ClientError(
+      'SANITY_REVISION_REQUIRED',
+      'Final update requires the revision returned by its dry-run.',
+    )
+  }
+  return revision
 }
 
 function isStrictCalendarDate(value) {
@@ -406,12 +451,20 @@ function sanitizeSuccessEnvelope(operation, payload, expectedSlug, token, expect
   }
 
   if (!validUploadedAssetIds(data.uploadedAssetIds, token)) return undefined
-  if (operation === 'dry-run') {
-    if (data.status !== 'dry-run' || data.mode !== 'create') return undefined
+  if (operation === 'dry-run' || operation === 'update-dry-run') {
+    const mode = operation === 'dry-run' ? 'create' : 'update'
+    if (data.status !== 'dry-run' || data.mode !== mode) return undefined
+    if (
+      mode === 'update' &&
+      (!validResultId(data.id, token) || !validResultId(data.revision, token))
+    ) {
+      return undefined
+    }
     return {
       data: {
         status: 'dry-run',
-        mode: 'create',
+        mode,
+        ...(mode === 'update' ? {id: data.id, revision: data.revision} : {}),
         slug: expectedSlug,
         uploadedAssetIds: [...data.uploadedAssetIds],
         ...(expectedTarget ? {target: {...expectedTarget}} : {}),
@@ -420,9 +473,10 @@ function sanitizeSuccessEnvelope(operation, payload, expectedSlug, token, expect
     }
   }
 
+  const expectedMode = operation === 'update' ? 'updated' : 'created'
   if (
     data.status !== 'published' ||
-    data.mode !== 'created' ||
+    data.mode !== expectedMode ||
     !validResultId(data.id, token) ||
     !validResultId(data.revision, token)
   ) {
@@ -431,7 +485,7 @@ function sanitizeSuccessEnvelope(operation, payload, expectedSlug, token, expect
   return {
     data: {
       status: 'published',
-      mode: 'created',
+      mode: expectedMode,
       id: data.id,
       revision: data.revision,
       slug: expectedSlug,
@@ -505,23 +559,30 @@ export async function requestArticle(
   operation,
   articlePath,
   {
-      blogRoot,
-      token,
-      publisherApiOrigin,
-      publishingConfig,
+    blogRoot,
+    token,
+    publisherApiOrigin,
+    publishingConfig,
+    expectedRevision,
     snapshot,
     fetchImpl = globalThis.fetch,
     timeoutMs = REQUEST_TIMEOUT_MS,
   } = {},
 ) {
+  if (typeof fetchImpl !== 'function') throw new ClientError('FETCH_UNAVAILABLE', '当前 Node 无 fetch。')
+  const inspectedRequest = snapshot
+    ? materializeArticleSnapshot(snapshot)
+    : await buildArticleRequest(articlePath, {blogRoot})
+  const request = withoutPublishedAtForUpdate(
+    inspectedRequest,
+    operation,
+    path.basename(snapshot?.articlePath ?? path.resolve(articlePath)),
+  )
   const url = endpoint(
     operation,
     publishingConfig?.publisherApiOrigin ?? publisherApiOrigin,
+    request.article.slug,
   )
-  if (typeof fetchImpl !== 'function') throw new ClientError('FETCH_UNAVAILABLE', '当前 Node 无 fetch。')
-  const request = snapshot
-    ? materializeArticleSnapshot(snapshot)
-    : await buildArticleRequest(articlePath, {blogRoot})
   const headers = {...request.headers}
   let expectedTarget
   if (operation !== 'validate') {
@@ -542,11 +603,19 @@ export async function requestArticle(
       headers['X-Sanity-Token'] = token
     }
   }
+  if (operation === 'update') {
+    headers['X-Sanity-If-Revision-Id'] = validateExpectedRevision(expectedRevision)
+  } else if (expectedRevision !== undefined) {
+    throw new ClientError(
+      'SANITY_REVISION_INVALID',
+      'A revision precondition is only valid for the final update request.',
+    )
+  }
 
   let response
   try {
     response = await fetchImpl(url, {
-      method: 'POST',
+      method: operation === 'update-dry-run' || operation === 'update' ? 'PUT' : 'POST',
       headers,
       body: request.body,
       redirect: 'error',
@@ -554,7 +623,10 @@ export async function requestArticle(
     })
   } catch {
     throw new PublisherApiError({
-      code: operation === 'create' ? 'NETWORK_RESULT_UNKNOWN' : 'NETWORK_REQUEST_FAILED',
+      code:
+        operation === 'create' || operation === 'update'
+          ? 'NETWORK_RESULT_UNKNOWN'
+          : 'NETWORK_REQUEST_FAILED',
     })
   }
 

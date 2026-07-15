@@ -52,10 +52,11 @@ test('SKILL.md has minimal frontmatter and the complete guarded workflow', async
   assert.match(markdown, /初稿[\s\S]*润色|draft[\s\S]*polish/iu)
   assert.match(markdown, /blog[\\/]<slug>\.md/iu)
   assert.match(markdown, /imagegen|原创封面/iu)
-  assert.match(markdown, /-vN/iu)
+  assert.match(markdown, /workspace\.mjs prepare/iu)
   assert.match(markdown, /probe[\s\S]*publish/iu)
   assert.match(markdown, /不再二次确认|无需二次确认|no second confirmation/iu)
-  assert.match(markdown, /不得.*PUT|never.*PUT/iu)
+  assert.match(markdown, /hidden remote|自动.*更新|自动.*create|自动.*update/iu)
+  assert.match(markdown, /PUT dry-run/iu)
   assert.ok(markdown.split(/\r?\n/u).length < 500)
 })
 

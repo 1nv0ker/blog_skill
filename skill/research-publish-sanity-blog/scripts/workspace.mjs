@@ -1,6 +1,16 @@
-import {randomUUID} from 'node:crypto'
+import {createHash, randomUUID} from 'node:crypto'
 import {constants as fsConstants} from 'node:fs'
-import {copyFile, lstat, mkdir, readFile, realpath, rm, unlink, writeFile} from 'node:fs/promises'
+import {
+  copyFile,
+  lstat,
+  mkdir,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  unlink,
+  writeFile,
+} from 'node:fs/promises'
 import path from 'node:path'
 import {fileURLToPath} from 'node:url'
 
@@ -12,6 +22,9 @@ const VALIDATE_COMMAND = 'node src/cli.mjs validate'
 const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u
 const MAX_SLUG_LENGTH = 96
 const MAX_CANDIDATES = 10
+const MAX_TEXT_FILE_BYTES = 2 * 1024 * 1024
+const MAX_COVER_BYTES = 20 * 1024 * 1024
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
 
 export class WorkspaceError extends Error {
   constructor(code, message) {
@@ -142,6 +155,65 @@ async function pathExists(candidate) {
   }
 }
 
+async function snapshotBundleFile(file, blogRoot, key) {
+  try {
+    const info = await lstat(file)
+    const resolved = await realpath(file)
+    if (
+      !info.isFile() ||
+      info.isSymbolicLink() ||
+      !isInside(blogRoot, resolved) ||
+      resolved !== path.resolve(file)
+    ) {
+      throw new Error('unsafe file')
+    }
+    const maxBytes = key === 'cover' ? MAX_COVER_BYTES : MAX_TEXT_FILE_BYTES
+    if (info.size <= 0 || info.size > maxBytes) {
+      throw new WorkspaceError(
+        'LOCAL_BUNDLE_SIZE_INVALID',
+        'Existing blog bundle contains an empty or oversized file.',
+      )
+    }
+    const bytes = await readFile(resolved)
+    if (key === 'cover' && !bytes.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)) {
+      throw new WorkspaceError(
+        'LOCAL_BUNDLE_COVER_INVALID',
+        'Existing blog cover is not a valid PNG file.',
+      )
+    }
+    return createHash('sha256').update(bytes).digest('hex')
+  } catch (error) {
+    if (error instanceof WorkspaceError) throw error
+    throw new WorkspaceError('LOCAL_BUNDLE_UNSAFE', 'Existing blog bundle is unsafe.')
+  }
+}
+
+async function inspectLocalBundle(slug, blogRoot) {
+  const paths = bundlePaths(slug, {blogRoot})
+  const exists = await Promise.all(Object.values(paths).map(pathExists))
+  const count = exists.filter(Boolean).length
+  if (count === 0) return {mode: 'create', paths}
+  if (count !== exists.length) {
+    throw new WorkspaceError(
+      'LOCAL_BUNDLE_INCOMPLETE',
+      'Existing blog bundle must contain Markdown, JSON, and cover files.',
+    )
+  }
+  const baseline = {}
+  for (const key of ['markdown', 'article', 'cover']) {
+    baseline[key] = await snapshotBundleFile(paths[key], blogRoot, key)
+  }
+  return {mode: 'update', paths, baseline}
+}
+
+function sameBaseline(left, right) {
+  return (
+    left?.markdown === right?.markdown &&
+    left?.article === right?.article &&
+    left?.cover === right?.cover
+  )
+}
+
 export async function allocateLocalSlug(
   baseSlug,
   {blogRoot = path.join(WORKSPACE_ROOT, 'blog'), startVersion = 1} = {},
@@ -216,16 +288,33 @@ async function readReservation(slug, reservationId, blogRoot) {
   } catch {
     throw new WorkspaceError('RESERVATION_NOT_FOUND', 'Reservation was not found or is unsafe.')
   }
+  const mode = marker?.mode ?? 'create'
+  const validBaseline =
+    mode === 'update' &&
+    marker.baseline &&
+    typeof marker.baseline === 'object' &&
+    ['markdown', 'article', 'cover'].every(
+      (key) => typeof marker.baseline[key] === 'string' && /^[0-9a-f]{64}$/u.test(marker.baseline[key]),
+    )
   if (
     !marker ||
     typeof marker !== 'object' ||
-    Object.keys(marker).length !== 2 ||
     marker.slug !== slug ||
-    marker.reservationId !== reservationId
+    marker.reservationId !== reservationId ||
+    !['create', 'update'].includes(mode) ||
+    (mode === 'update' && !validBaseline)
   ) {
     throw new WorkspaceError('RESERVATION_MISMATCH', 'Reservation ownership does not match.')
   }
-  return layout
+  return {
+    ...layout,
+    reservation: {
+      slug,
+      reservationId,
+      mode,
+      ...(validBaseline ? {baseline: marker.baseline} : {}),
+    },
+  }
 }
 
 export async function reserveLocalSlug(
@@ -253,7 +342,7 @@ export async function reserveLocalSlug(
     try {
       await writeFile(
         layout.marker,
-        `${JSON.stringify({slug, reservationId})}\n`,
+        `${JSON.stringify({slug, reservationId, mode: 'create'})}\n`,
         {encoding: 'utf8', flag: 'wx', mode: 0o600},
       )
     } catch (error) {
@@ -284,6 +373,76 @@ export async function reserveLocalSlug(
   throw new WorkspaceError('SLUG_EXHAUSTED', 'No free local slug remains in the first 10 versions.')
 }
 
+export async function prepareLocalBundle(
+  baseSlug,
+  {blogRoot = path.join(WORKSPACE_ROOT, 'blog')} = {},
+) {
+  const slug = assertBaseSlug(baseSlug)
+  const reservationsRoot = path.join(blogRoot, '.reservations')
+  const stagingRoot = path.join(blogRoot, '.staging')
+  await Promise.all([
+    ensureControlDirectory(reservationsRoot),
+    ensureControlDirectory(stagingRoot),
+  ])
+
+  const state = await inspectLocalBundle(slug, blogRoot)
+  const reservationId = randomUUID()
+  const layout = reservationLayout(slug, reservationId, blogRoot)
+  const marker = {
+    slug,
+    reservationId,
+    mode: state.mode,
+    ...(state.mode === 'update' ? {baseline: state.baseline} : {}),
+  }
+  try {
+    await writeFile(layout.marker, `${JSON.stringify(marker)}\n`, {
+      encoding: 'utf8',
+      flag: 'wx',
+      mode: 0o600,
+    })
+  } catch (error) {
+    if (error?.code === 'EEXIST') {
+      throw new WorkspaceError('SLUG_BUSY', 'This slug is already being prepared by another run.')
+    }
+    throw new WorkspaceError('RESERVATION_CREATE_FAILED', 'Unable to create slug reservation.')
+  }
+
+  try {
+    await mkdir(path.dirname(layout.staging.cover), {recursive: true, mode: 0o700})
+    const current = await inspectLocalBundle(slug, blogRoot)
+    if (current.mode !== state.mode || !sameBaseline(current.baseline, state.baseline)) {
+      throw new WorkspaceError(
+        'OUTPUT_CHANGED',
+        'The local blog bundle changed while the update was being prepared.',
+      )
+    }
+    if (state.mode === 'update') {
+      for (const key of ['markdown', 'cover', 'article']) {
+        await copyFile(state.paths[key], layout.staging[key], fsConstants.COPYFILE_EXCL)
+      }
+      const afterCopy = await inspectLocalBundle(slug, blogRoot)
+      if (afterCopy.mode !== 'update' || !sameBaseline(afterCopy.baseline, state.baseline)) {
+        throw new WorkspaceError(
+          'OUTPUT_CHANGED',
+          'The local blog bundle changed while staging copies were created.',
+        )
+      }
+    }
+    return {
+      slug,
+      mode: state.mode,
+      reservationId,
+      staging: layout.staging,
+      paths: state.paths,
+    }
+  } catch (error) {
+    await rm(layout.stagingRoot, {recursive: true, force: true}).catch(() => {})
+    await removeFileIfPresent(layout.marker).catch(() => {})
+    if (error instanceof WorkspaceError) throw error
+    throw new WorkspaceError('RESERVATION_CREATE_FAILED', 'Unable to prepare staging directory.')
+  }
+}
+
 export async function releaseReservation(
   slug,
   reservationId,
@@ -308,10 +467,75 @@ async function assertStagingFile(file, stagingRoot) {
   }
 }
 
+async function assertUnchangedUpdateBundle(layout, blogRoot) {
+  const current = await inspectLocalBundle(layout.reservation.slug, blogRoot)
+  if (
+    current.mode !== 'update' ||
+    !sameBaseline(current.baseline, layout.reservation.baseline)
+  ) {
+    throw new WorkspaceError(
+      'OUTPUT_CHANGED',
+      'The existing blog bundle changed after update preparation began.',
+    )
+  }
+}
+
+async function replaceUpdateBundle(layout, sources, blogRoot, fileOps = {}) {
+  const copyFileImpl = fileOps.copyFile ?? copyFile
+  const renameImpl = fileOps.rename ?? rename
+  const removeFileImpl = fileOps.removeFile ?? removeFileIfPresent
+  await assertUnchangedUpdateBundle(layout, blogRoot)
+  const keys = ['markdown', 'cover', 'article']
+  const temporary = {}
+  const backups = {}
+  for (const key of keys) {
+    temporary[key] = `${layout.paths[key]}.${layout.reservation.reservationId}.next`
+    backups[key] = `${layout.paths[key]}.${layout.reservation.reservationId}.backup`
+  }
+
+  const installed = []
+  const moved = []
+  try {
+    for (const key of keys) {
+      await copyFileImpl(sources[key], temporary[key], fsConstants.COPYFILE_EXCL)
+    }
+    await assertUnchangedUpdateBundle(layout, blogRoot)
+    for (const key of keys) {
+      await renameImpl(layout.paths[key], backups[key])
+      moved.push(key)
+      await renameImpl(temporary[key], layout.paths[key])
+      installed.push(key)
+    }
+  } catch (error) {
+    const recoveryFailures = []
+    for (const key of [...moved].reverse()) {
+      try {
+        if (installed.includes(key)) await removeFileImpl(layout.paths[key])
+        await renameImpl(backups[key], layout.paths[key])
+      } catch {
+        recoveryFailures.push(key)
+      }
+    }
+    await Promise.all(
+      Object.values(temporary).map((file) => removeFileImpl(file).catch(() => {})),
+    )
+    if (recoveryFailures.length) {
+      throw new WorkspaceError(
+        'OUTPUT_RECOVERY_REQUIRED',
+        'Local bundle rollback was incomplete; recovery backups were preserved.',
+      )
+    }
+    if (error instanceof WorkspaceError) throw error
+    throw new WorkspaceError('OUTPUT_COMMIT_FAILED', 'Unable to replace the complete output bundle.')
+  }
+
+  await Promise.all(Object.values(backups).map((file) => removeFileImpl(file)))
+}
+
 export async function commitReservation(
   slug,
   reservationId,
-  {blogRoot = path.join(WORKSPACE_ROOT, 'blog')} = {},
+  {blogRoot = path.join(WORKSPACE_ROOT, 'blog'), updateFileOps} = {},
 ) {
   const layout = await readReservation(slug, reservationId, blogRoot)
   const sources = {
@@ -319,35 +543,42 @@ export async function commitReservation(
     cover: await assertStagingFile(layout.staging.cover, layout.stagingRoot),
     article: await assertStagingFile(layout.staging.article, layout.stagingRoot),
   }
-  if ((await Promise.all(Object.values(layout.paths).map(pathExists))).some(Boolean)) {
-    throw new WorkspaceError('OUTPUT_COLLISION', 'A final output appeared after reservation.')
-  }
-
-  const created = []
-  try {
-    for (const key of ['markdown', 'cover', 'article']) {
-      await copyFile(sources[key], layout.paths[key], fsConstants.COPYFILE_EXCL)
-      created.push(layout.paths[key])
+  if (layout.reservation.mode === 'update') {
+    await replaceUpdateBundle(layout, sources, blogRoot, updateFileOps)
+  } else {
+    if ((await Promise.all(Object.values(layout.paths).map(pathExists))).some(Boolean)) {
+      throw new WorkspaceError('OUTPUT_COLLISION', 'A final output appeared after reservation.')
     }
-  } catch {
-    await Promise.all(created.map((file) => removeFileIfPresent(file).catch(() => {})))
-    throw new WorkspaceError('OUTPUT_COMMIT_FAILED', 'Unable to commit the complete output bundle.')
+
+    const created = []
+    try {
+      for (const key of ['markdown', 'cover', 'article']) {
+        await copyFile(sources[key], layout.paths[key], fsConstants.COPYFILE_EXCL)
+        created.push(layout.paths[key])
+      }
+    } catch {
+      await Promise.all(created.map((file) => removeFileIfPresent(file).catch(() => {})))
+      throw new WorkspaceError('OUTPUT_COMMIT_FAILED', 'Unable to commit the complete output bundle.')
+    }
   }
 
   await rm(layout.stagingRoot, {recursive: true, force: true})
   await removeFileIfPresent(layout.marker)
-  return {slug, paths: layout.paths}
+  return {slug, mode: layout.reservation.mode, paths: layout.paths}
 }
 
 function argumentError() {
   return new WorkspaceError(
     'ARGUMENT_INVALID',
-    'Use allocate/reserve <base-slug> [--start=1..10], or commit/release <slug> <reservation-id>.',
+    'Use prepare <base-slug>, allocate/reserve <base-slug> [--start=1..10], or commit/release <slug> <reservation-id>.',
   )
 }
 
 export function parseWorkspaceArguments(args) {
   if (!Array.isArray(args) || args.length < 2 || args.length > 3) throw argumentError()
+  if (args[0] === 'prepare' && args.length === 2) {
+    return {operation: 'prepare', baseSlug: assertBaseSlug(args[1])}
+  }
   if (['allocate', 'reserve'].includes(args[0])) {
     const baseSlug = assertBaseSlug(args[1])
     let startVersion = 1
@@ -384,6 +615,8 @@ export async function runWorkspaceCommand(
       startVersion: parsed.startVersion,
     })
     result = {slug, paths: bundlePaths(slug, {blogRoot: workspace.blogRoot})}
+  } else if (parsed.operation === 'prepare') {
+    result = await prepareLocalBundle(parsed.baseSlug, {blogRoot: workspace.blogRoot})
   } else if (parsed.operation === 'reserve') {
     result = await reserveLocalSlug(parsed.baseSlug, {
       blogRoot: workspace.blogRoot,

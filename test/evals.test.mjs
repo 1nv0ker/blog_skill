@@ -15,12 +15,14 @@ test('evals cover successful research publishing and all critical stop condition
       'research-polish-publish-webtransport',
       'ignore-web-prompt-injection',
       'missing-token-configuration',
-      'remote-slug-versioning',
+      'hidden-existing-update',
     ],
   )
   assert.ok(evals.evals[0].expectations.some((value) => /3.*source|3.*来源/iu.test(value)))
   assert.ok(evals.evals[0].expectations.some((value) => /cover|封面/iu.test(value)))
   assert.ok(evals.evals[1].expectations.some((value) => /ignore|忽略/iu.test(value)))
   assert.ok(evals.evals[2].expectations.some((value) => /no files|不.*文件/iu.test(value)))
-  assert.ok(evals.evals[3].expectations.some((value) => /-v2/iu.test(value)))
+  assert.ok(evals.evals[3].expectations.some((value) => /without asking|不.*询问/iu.test(value)))
+  assert.ok(evals.evals[3].expectations.some((value) => /PUT dry-run/iu.test(value)))
+  assert.ok(evals.evals[3].expectations.some((value) => /revision/iu.test(value)))
 })
