@@ -1,0 +1,17 @@
+{
+  "name": "sanity-blog-research-publisher-skill",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "npm@10.9.3",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "configure": "node skill/research-publish-sanity-blog/scripts/configure.mjs",
+    "validate": "node skill/research-publish-sanity-blog/scripts/validate-output.mjs",
+    "probe": "node skill/research-publish-sanity-blog/scripts/publish-output.mjs probe",
+    "publish": "node skill/research-publish-sanity-blog/scripts/publish-output.mjs publish",
+    "test": "node --test"
+  }
+}

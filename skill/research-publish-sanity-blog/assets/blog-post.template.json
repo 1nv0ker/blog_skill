@@ -1,0 +1,71 @@
+{
+  "title": {
+    "en": "Replace with the English title",
+    "zh": "替换为中文标题"
+  },
+  "slug": "replace-with-article-slug",
+  "publishedAt": "2026-07-15T00:00:00.000Z",
+  "excerpt": {
+    "en": "Replace with a concise English summary.",
+    "zh": "替换为简洁的中文摘要。"
+  },
+  "coverImage": {
+    "source": {
+      "path": "./assets/replace-with-article-slug-cover.png"
+    },
+    "alt": {
+      "en": "Replace with meaningful English cover alt text",
+      "zh": "替换为有意义的中文封面替代文本"
+    }
+  },
+  "body": {
+    "en": [
+      {
+        "_type": "block",
+        "style": "normal",
+        "markDefs": [],
+        "children": [
+          {
+            "_type": "span",
+            "text": "Replace with polished English content.",
+            "marks": []
+          }
+        ]
+      },
+      {
+        "_type": "code",
+        "language": "javascript",
+        "code": "console.log('Replace with a verified example')"
+      }
+    ],
+    "zh": [
+      {
+        "_type": "block",
+        "style": "normal",
+        "markDefs": [],
+        "children": [
+          {
+            "_type": "span",
+            "text": "替换为润色后的中文正文。",
+            "marks": []
+          }
+        ]
+      },
+      {
+        "_type": "code",
+        "language": "javascript",
+        "code": "console.log('替换为经过核实的示例')"
+      }
+    ]
+  },
+  "seo": {
+    "title": {
+      "en": "Replace with the English SEO title",
+      "zh": "替换为中文 SEO 标题"
+    },
+    "description": {
+      "en": "Replace with a concise English SEO description.",
+      "zh": "替换为简洁的中文 SEO 描述。"
+    }
+  }
+}

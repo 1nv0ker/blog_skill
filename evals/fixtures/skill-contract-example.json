@@ -1,0 +1,137 @@
+{
+  "title": {
+    "en": "WebTransport: Streams and Datagrams over HTTP/3",
+    "zh": "WebTransport：基于 HTTP/3 的流与数据报"
+  },
+  "slug": "skill-contract-example",
+  "publishedAt": "2026-07-15T00:00:00.000Z",
+  "excerpt": {
+    "en": "A concise technical introduction to WebTransport sessions, streams, datagrams, and deployment trade-offs.",
+    "zh": "简要介绍 WebTransport 会话、流、数据报及其部署权衡。"
+  },
+  "coverImage": {
+    "source": {
+      "path": "./assets/skill-contract-example-cover.png"
+    },
+    "alt": {
+      "en": "Abstract network paths representing WebTransport streams and datagrams",
+      "zh": "表示 WebTransport 流与数据报的抽象网络路径"
+    }
+  },
+  "body": {
+    "en": [
+      {
+        "_type": "block",
+        "style": "normal",
+        "markDefs": [],
+        "children": [
+          {
+            "_type": "span",
+            "text": "WebTransport supports bidirectional sessions with streams and datagrams.",
+            "marks": []
+          }
+        ]
+      },
+      {
+        "_type": "code",
+        "language": "javascript",
+        "code": "const transport = new WebTransport('https://example.com/session')\nawait transport.ready"
+      },
+      {
+        "_type": "block",
+        "style": "h2",
+        "markDefs": [],
+        "children": [
+          {
+            "_type": "span",
+            "text": "Sources",
+            "marks": []
+          }
+        ]
+      },
+      {
+        "_type": "block",
+        "style": "normal",
+        "markDefs": [
+          {
+            "_type": "link",
+            "_key": "webtransport-spec",
+            "href": "https://www.w3.org/TR/webtransport/",
+            "openInNewTab": true
+          }
+        ],
+        "children": [
+          {
+            "_type": "span",
+            "text": "W3C WebTransport specification",
+            "marks": [
+              "webtransport-spec"
+            ]
+          }
+        ]
+      }
+    ],
+    "zh": [
+      {
+        "_type": "block",
+        "style": "normal",
+        "markDefs": [],
+        "children": [
+          {
+            "_type": "span",
+            "text": "WebTransport 通过流和数据报提供双向会话能力。",
+            "marks": []
+          }
+        ]
+      },
+      {
+        "_type": "code",
+        "language": "javascript",
+        "code": "const transport = new WebTransport('https://example.com/session')\nawait transport.ready"
+      },
+      {
+        "_type": "block",
+        "style": "h2",
+        "markDefs": [],
+        "children": [
+          {
+            "_type": "span",
+            "text": "来源",
+            "marks": []
+          }
+        ]
+      },
+      {
+        "_type": "block",
+        "style": "normal",
+        "markDefs": [
+          {
+            "_type": "link",
+            "_key": "webtransport-spec-zh",
+            "href": "https://www.w3.org/TR/webtransport/",
+            "openInNewTab": true
+          }
+        ],
+        "children": [
+          {
+            "_type": "span",
+            "text": "W3C WebTransport 规范",
+            "marks": [
+              "webtransport-spec-zh"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "seo": {
+    "title": {
+      "en": "WebTransport Streams and Datagrams Guide",
+      "zh": "WebTransport 流与数据报指南"
+    },
+    "description": {
+      "en": "Understand WebTransport sessions, reliable streams, unreliable datagrams, and practical deployment considerations.",
+      "zh": "了解 WebTransport 会话、可靠流、不可靠数据报及实际部署注意事项。"
+    }
+  }
+}
