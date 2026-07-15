@@ -155,6 +155,7 @@ export async function runPublishingCommand(
   if (operation === 'probe') {
     const validation = await requestArticle('validate', articlePath, {
       blogRoot: workspace.blogRoot,
+      ...requestCredentials,
       fetchImpl,
       snapshot,
       timeoutMs,
@@ -171,6 +172,7 @@ export async function runPublishingCommand(
 
   const validation = await requestArticle('validate', articlePath, {
     blogRoot: workspace.blogRoot,
+    ...requestCredentials,
     fetchImpl,
     snapshot,
     timeoutMs,

@@ -1,6 +1,6 @@
 ---
 name: research-publish-sanity-blog
-description: Research a named technology from authoritative web sources, draft and polish a bilingual English/Chinese technical article, generate an original cover and Sanity blog JSON, validate it, and publish it through the fixed MiyaIP API. Use only when the user explicitly invokes this skill to create and publish a new technology blog post.
+description: Research a named technology from authoritative web sources, draft and polish a bilingual English/Chinese technical article, generate an original cover and Sanity blog JSON, validate it, and publish it through the configured publisher API. Use only when the user explicitly invokes this skill to create and publish a new technology blog post.
 ---
 
 # Research and Publish a Sanity Blog
@@ -23,7 +23,7 @@ If the helper reports `CONFIG_MISSING`, run this once:
 node <skill-directory>\scripts\configure.mjs --init
 ```
 
-Then stop before creating article files and tell the user to fill the generated fixed file with exactly these fields: `projectId`, `dataset`, `apiVersion`, and `sanityToken`. Do not ask the user for a path. If `--check` reports an incomplete or invalid configuration, tell the user to correct that same fixed file; never overwrite it.
+Then stop before creating article files and tell the user to fill the generated fixed file with exactly these fields: `publisherApiOrigin`, `projectId`, `dataset`, `apiVersion`, and `sanityToken`. `publisherApiOrigin` must be a bare HTTPS origin such as `https://publish.miyaip.com`, without a path, query, fragment, or embedded credentials. Do not ask the user for a path. If `--check` reports an incomplete or invalid configuration, tell the user to correct that same fixed file; never overwrite it.
 
 After a successful `--check`, continue silently without repeating configuration questions. Never accept configuration values or a token in chat, command arguments, environment variables, Markdown, article JSON, logs, or source files. If any token was previously pasted into chat, tell the user to rotate it before filling the file.
 

@@ -1,8 +1,6 @@
 import {lstat, readFile, realpath} from 'node:fs/promises'
 import path from 'node:path'
 
-export const API_ORIGIN = 'https://publish.miyaip.com'
-
 const MAX_ARTICLE_BYTES = 2 * 1024 * 1024
 const MAX_ASSET_BYTES = 20 * 1024 * 1024
 const MAX_ASSETS = 10
@@ -256,10 +254,35 @@ function materializeArticleSnapshot(snapshot) {
   return {article: snapshot.article, body, headers: {}, localAssets: snapshot.localAssets}
 }
 
-function endpoint(operation) {
-  if (operation === 'validate') return `${API_ORIGIN}/v1/blog-post-validations`
-  if (operation === 'dry-run') return `${API_ORIGIN}/v1/blog-posts?dryRun=true`
-  if (operation === 'create') return `${API_ORIGIN}/v1/blog-posts`
+function normalizePublisherApiOrigin(value) {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 2048 || value.trim() !== value) {
+    throw new ClientError('PUBLISHER_ORIGIN_INVALID', 'Publisher API origin is invalid.')
+  }
+  let url
+  try {
+    url = new URL(value)
+  } catch {
+    throw new ClientError('PUBLISHER_ORIGIN_INVALID', 'Publisher API origin is invalid.')
+  }
+  if (
+    url.protocol !== 'https:' ||
+    !url.hostname ||
+    url.username ||
+    url.password ||
+    url.pathname !== '/' ||
+    url.search ||
+    url.hash
+  ) {
+    throw new ClientError('PUBLISHER_ORIGIN_INVALID', 'Publisher API origin is invalid.')
+  }
+  return url.origin
+}
+
+function endpoint(operation, publisherApiOrigin) {
+  const origin = normalizePublisherApiOrigin(publisherApiOrigin)
+  if (operation === 'validate') return `${origin}/v1/blog-post-validations`
+  if (operation === 'dry-run') return `${origin}/v1/blog-posts?dryRun=true`
+  if (operation === 'create') return `${origin}/v1/blog-posts`
   throw new ClientError('OPERATION_INVALID', '只允许 validate、dry-run 或 create。')
 }
 
@@ -298,6 +321,7 @@ function validatePublishingConfig(config) {
   }
   validateToken(config.sanityToken)
   return {
+    publisherApiOrigin: normalizePublisherApiOrigin(config.publisherApiOrigin),
     projectId: config.projectId,
     dataset: config.dataset,
     apiVersion: config.apiVersion,
@@ -481,15 +505,19 @@ export async function requestArticle(
   operation,
   articlePath,
   {
-    blogRoot,
-    token,
-    publishingConfig,
+      blogRoot,
+      token,
+      publisherApiOrigin,
+      publishingConfig,
     snapshot,
     fetchImpl = globalThis.fetch,
     timeoutMs = REQUEST_TIMEOUT_MS,
   } = {},
 ) {
-  const url = endpoint(operation)
+  const url = endpoint(
+    operation,
+    publishingConfig?.publisherApiOrigin ?? publisherApiOrigin,
+  )
   if (typeof fetchImpl !== 'function') throw new ClientError('FETCH_UNAVAILABLE', '当前 Node 无 fetch。')
   const request = snapshot
     ? materializeArticleSnapshot(snapshot)

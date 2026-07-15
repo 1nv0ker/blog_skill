@@ -4,11 +4,12 @@ import {tmpdir} from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import {API_ORIGIN} from '../skill/research-publish-sanity-blog/scripts/api-client.mjs'
 import {
   parsePublishingArguments,
   runPublishingCommand,
 } from '../skill/research-publish-sanity-blog/scripts/publish-output.mjs'
+
+const API_ORIGIN = 'https://publisher.pipeline.example.test'
 
 const SANITY_TARGET = Object.freeze({
   projectId: 'pcjr7pm7',
@@ -73,7 +74,7 @@ async function fixture() {
   const configPath = path.join(secrets, 'config.json')
   await writeFile(
     configPath,
-    `${JSON.stringify({...SANITY_TARGET, sanityToken: 'opaque-pipeline-token'}, null, 2)}\n`,
+    `${JSON.stringify({publisherApiOrigin: API_ORIGIN, ...SANITY_TARGET, sanityToken: 'opaque-pipeline-token'}, null, 2)}\n`,
     {mode: 0o600},
   )
   return {

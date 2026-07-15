@@ -16,6 +16,7 @@ import {
 } from '../skill/research-publish-sanity-blog/scripts/configure.mjs'
 
 const VALID_CONFIG = Object.freeze({
+  publisherApiOrigin: 'https://publish.miyaip.com',
   projectId: 'pcjr7pm7',
   dataset: 'production',
   apiVersion: '2026-07-05',
@@ -61,6 +62,7 @@ test('initialization creates one fill-in template and never overwrites it', asyn
   await initializePublishingConfig(options(f))
 
   assert.deepEqual(JSON.parse(await readFile(f.configPath, 'utf8')), {
+    publisherApiOrigin: 'https://publish.miyaip.com',
     projectId: 'pcjr7pm7',
     dataset: 'production',
     apiVersion: '2026-07-05',
@@ -84,6 +86,9 @@ test('rejects malformed target fields, token content, and extra keys without lea
   const f = await fixture()
   await mkdir(path.dirname(f.configPath), {recursive: true})
   const cases = [
+    [{...VALID_CONFIG, publisherApiOrigin: 'http://publisher.example.com'}, 'PUBLISHER_ORIGIN_INVALID'],
+    [{...VALID_CONFIG, publisherApiOrigin: 'https://publisher.example.com/v1'}, 'PUBLISHER_ORIGIN_INVALID'],
+    [{...VALID_CONFIG, publisherApiOrigin: 'https://user:pass@publisher.example.com'}, 'PUBLISHER_ORIGIN_INVALID'],
     [{...VALID_CONFIG, projectId: 'UPPER-project'}, 'SANITY_TARGET_INVALID'],
     [{...VALID_CONFIG, dataset: 'bad dataset'}, 'SANITY_TARGET_INVALID'],
     [{...VALID_CONFIG, apiVersion: '2026-02-30'}, 'SANITY_TARGET_INVALID'],

@@ -24,8 +24,15 @@ const MAX_CONFIG_FILE_BYTES = 16 * 1024
 const PROJECT_ID_PATTERN = /^[a-z0-9]{1,64}$/u
 const DATASET_PATTERN = /^[A-Za-z0-9_-]{1,64}$/u
 const API_VERSION_PATTERN = /^\d{4}-\d{2}-\d{2}$/u
-const COMBINED_CONFIG_KEYS = ['apiVersion', 'dataset', 'projectId', 'sanityToken']
+const COMBINED_CONFIG_KEYS = [
+  'apiVersion',
+  'dataset',
+  'projectId',
+  'publisherApiOrigin',
+  'sanityToken',
+]
 const CONFIG_TEMPLATE = Object.freeze({
+  publisherApiOrigin: 'https://publish.miyaip.com',
   projectId: 'pcjr7pm7',
   dataset: 'production',
   apiVersion: '2026-07-05',
@@ -153,7 +160,41 @@ function isStrictCalendarDate(value) {
   )
 }
 
+function normalizePublisherApiOrigin(value) {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 2048 || value.trim() !== value) {
+    throw new ConfigError(
+      'PUBLISHER_ORIGIN_INVALID',
+      'publisherApiOrigin must be a valid HTTPS origin.',
+    )
+  }
+  let url
+  try {
+    url = new URL(value)
+  } catch {
+    throw new ConfigError(
+      'PUBLISHER_ORIGIN_INVALID',
+      'publisherApiOrigin must be a valid HTTPS origin.',
+    )
+  }
+  if (
+    url.protocol !== 'https:' ||
+    !url.hostname ||
+    url.username ||
+    url.password ||
+    url.pathname !== '/' ||
+    url.search ||
+    url.hash
+  ) {
+    throw new ConfigError(
+      'PUBLISHER_ORIGIN_INVALID',
+      'publisherApiOrigin must be a valid HTTPS origin.',
+    )
+  }
+  return url.origin
+}
+
 function validateCombinedConfig(config) {
+  const publisherApiOrigin = normalizePublisherApiOrigin(config.publisherApiOrigin)
   if (!PROJECT_ID_PATTERN.test(config.projectId)) {
     throw new ConfigError('SANITY_TARGET_INVALID', 'Sanity projectId format is invalid.')
   }
@@ -178,6 +219,7 @@ function validateCombinedConfig(config) {
     throw new ConfigError('TOKEN_FORMAT_INVALID', 'Sanity Token format is invalid.')
   }
   return Object.freeze({
+    publisherApiOrigin,
     projectId: config.projectId,
     dataset: config.dataset,
     apiVersion: config.apiVersion,

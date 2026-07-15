@@ -5,11 +5,14 @@ import path from 'node:path'
 import test from 'node:test'
 
 import {
-  API_ORIGIN,
   PublisherApiError,
   buildArticleRequest,
-  requestArticle,
+  requestArticle as requestArticleImpl,
 } from '../skill/research-publish-sanity-blog/scripts/api-client.mjs'
+
+const API_ORIGIN = 'https://publisher.example.test'
+const requestArticle = (operation, articlePath, options = {}) =>
+  requestArticleImpl(operation, articlePath, {publisherApiOrigin: API_ORIGIN, ...options})
 
 function article(slug = 'webtransport-guide') {
   return {
@@ -45,6 +48,7 @@ function response(body, status = 200) {
 }
 
 const PUBLISHING_CONFIG = Object.freeze({
+  publisherApiOrigin: 'https://configured-publisher.example.test',
   projectId: 'pcjr7pm7',
   dataset: 'production',
   apiVersion: '2026-07-05',
@@ -78,6 +82,7 @@ test('configured requests send the complete target and require the API to echo i
   })
 
   assert.deepEqual(result.data.target, expectedTarget)
+  assert.equal(calls[0].url, 'https://configured-publisher.example.test/v1/blog-posts?dryRun=true')
   assert.equal(calls[0].init.headers['X-Sanity-Project-Id'], 'pcjr7pm7')
   assert.equal(calls[0].init.headers['X-Sanity-Dataset'], 'production')
   assert.equal(calls[0].init.headers['X-Sanity-Api-Version'], '2026-07-05')

@@ -36,7 +36,7 @@ export async function runConfigureCommand(
   }
 
   const {configPath} = await initializeConfig()
-  log(`Configuration template created at ${configPath}. Fill all four fields, then run --check.`)
+  log(`Configuration template created at ${configPath}. Fill all five fields, then run --check.`)
   return {mode: 'init'}
 }
 
